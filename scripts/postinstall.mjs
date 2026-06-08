@@ -50,21 +50,32 @@ async function main() {
     return;
   }
 
-  // Don't set up our own repo during development, and skip CI unless asked.
+  // Don't touch our own repo during development, and skip CI unless asked.
   if (resolve(projectDir) === pkgDir) return;
   if (process.env.CI && process.env.CAIRN_SETUP !== "1") return;
 
-  try {
-    const { setupProject } = await import("../dist/setup/install.js");
-    const { renderProjectSetup } = await import("../dist/cli/screens.js");
-    process.stdout.write("\n" + renderProjectSetup(setupProject(projectDir)) + "\n");
-  } catch (err) {
-    // Never break `npm install`.
-    process.stdout.write(
-      "\n[cairn] Setup skipped (run `cairn setup` to finish): " +
-        `${err && err.message ? err.message : err}\n\n`,
-    );
+  // Project install: do NOT silently wire the repo. Setup is consent-based and
+  // agent-driven — on its first action an agent checks for `.agent/`, asks the
+  // user, then runs `cairn setup` + `cairn index`. Opt into legacy auto-setup
+  // with CAIRN_SETUP=1.
+  if (process.env.CAIRN_SETUP === "1") {
+    try {
+      const { setupProject } = await import("../dist/setup/install.js");
+      const { renderProjectSetup } = await import("../dist/cli/screens.js");
+      process.stdout.write("\n" + renderProjectSetup(setupProject(projectDir)) + "\n");
+    } catch (err) {
+      process.stdout.write(
+        "\n[cairn] Setup skipped (run `cairn setup` to finish): " +
+          `${err && err.message ? err.message : err}\n\n`,
+      );
+    }
+    return;
   }
+
+  process.stdout.write(
+    "\n[cairn] Installed. Your AI agent will offer to set up shared memory\n" +
+      "  (a `.agent/` journal) on its next action — or run `cairn setup` yourself.\n\n",
+  );
 }
 
 main();

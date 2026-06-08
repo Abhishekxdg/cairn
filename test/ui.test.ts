@@ -38,11 +38,11 @@ describe("terminal UI", () => {
     expect(screen).toContain("cairn status");
   });
 
-  it("global setup screen explains the once-forever model", () => {
+  it("global setup screen explains the consent-based model", () => {
     const home = tempDir();
     const screen = stripAnsi(renderGlobalSetup(installGlobal({ home })));
-    expect(screen).toContain("Installed globally");
-    expect(screen).toContain("you never set up a project again");
-    expect(screen).toContain("cairn setup");
+    expect(screen).toContain("installed globally");
+    expect(screen).toContain("Agents will ask before setting up");
+    expect(screen).toContain("cairn uninstall-global");
   });
 });

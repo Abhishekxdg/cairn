@@ -105,15 +105,19 @@ export const GLOBAL_RULES_BODY = `## Cairn — global bootstrap
 This machine has the \`cairn\` tool installed globally. Cairn is a shared, append-only
 memory journal for AI agents, stored in a project's \`.agent/\` directory.
 
-**Whenever you begin working in a code repository:**
-1. If the command \`cairn\` is available AND no \`.agent/\` directory exists at the repo
-   root, run once: \`cairn setup\`
-   (creates the journal and writes the project's Cairn rules into its agent files).
-2. Then follow that project's Cairn rules — fastest recall is to read
-   \`.agent/CONTEXT.md\` (or run \`cairn recall\`); record what you do as events
+**On your first action in any code repository, check whether Cairn is set up.
+Do NOT set it up silently:**
+1. If the command \`cairn\` is NOT available, skip everything below silently.
+2. If \`.agent/\` already exists at the repo root, Cairn is set up: follow that
+   project's Cairn rules — read \`.agent/CONTEXT.md\` (or run \`cairn recall\`) for
+   instant recall, and record what you do as events
    (\`cairn append --type ... --payload '{...}' --actor "<you>"\`).
-
-If \`cairn\` is not installed, skip silently — do not block your work on it.`;
+3. If \`cairn\` is available but \`.agent/\` does NOT exist, **ASK the user first**:
+   "This repo has no Cairn memory journal. Set one up so agents share memory
+   across sessions?" Only if they say yes:
+   a. Run \`cairn setup\` (creates the journal + wires the project's agent rules).
+   b. Then run \`cairn index\` to build the code graph (powers \`cairn relevant\`).
+   If the user declines, skip silently and do not ask again this session.`;
 
 /** The global bootstrap block including its markers. */
 export function globalRulesBlock(): string {

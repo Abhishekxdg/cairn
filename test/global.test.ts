@@ -15,7 +15,8 @@ describe("global bootstrap (install once, agents self-setup projects)", () => {
     const claude = readFileSync(join(home, ".claude", "CLAUDE.md"), "utf8");
     expect(claude).toContain(GLOBAL_BEGIN_MARKER);
     expect(claude).toContain("cairn setup");
-    expect(claude).toContain("no `.agent/` directory exists");
+    expect(claude).toContain("ASK the user first");
+    expect(claude).toContain("cairn index");
   });
 
   it("creates a tool's file when its config dir already exists", () => {

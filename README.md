@@ -128,21 +128,27 @@ Cairn removes.
 
 ## Install
 
-One global install; your agents set up every project for you after that.
+Install once, globally. The install itself is silent — no setup runs, nothing is
+written to your repos.
 
 ```bash
 npm install -g @memxai/cairn
 ```
 
-This teaches your agents (via their existing instruction files —
-`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, etc.) one rule: *"when you open a repo
-with no `.agent/`, run `cairn setup` first."* From then on, the agent creates the
-journal and starts recording on its first visit — no MCP wiring, no per-project
-install. Your own content in those files is preserved (Cairn lives in a managed
-block).
+Then run the global bootstrap once:
 
-Prefer per-project? `npm install --save-dev @memxai/cairn` does the same setup for
-one repo.
+```bash
+cairn install-global
+```
+
+This adds one rule to your agents' existing instruction files
+(`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, etc.): *on its first action in a repo
+that has no `.agent/`, the agent **asks you** whether to set up Cairn. Only if you
+say yes does it run `cairn setup` and build the code graph (`cairn index`).* No
+silent mutation, no MCP wiring. Your own content in those files is preserved (Cairn
+lives in a managed block). Undo anytime with `cairn uninstall-global`.
+
+Prefer to skip the agent prompt? Set a repo up yourself: `cairn setup`.
 
 ---
 

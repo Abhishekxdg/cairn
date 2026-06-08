@@ -1,13 +1,13 @@
-import { banner, box, step, style } from "./ui.js";
 import { AGENT_FILES, type SetupResult } from "../setup/install.js";
 import { GLOBAL_AGENT_FILES, type GlobalSetupResult } from "../setup/global.js";
 
 /**
- * Graphical "screens" for the install / setup flows. Shared by the `cairn` CLI and
- * the npm postinstall step so the experience is identical however Cairn is set up.
+ * Plain-text summaries for the install / setup flows. Shared by the `cairn` CLI
+ * and the npm postinstall step. Deliberately non-graphical — no banner, no boxes
+ * — so setup is quiet whether a human or an agent runs it.
  */
 
-/** Short, pretty agent names keyed by the instruction file they own. */
+/** Short agent names keyed by the instruction file they own. */
 const AGENT_NAMES: Record<string, string> = {
   "AGENTS.md": "Codex · OpenHands",
   "CLAUDE.md": "Claude Code",
@@ -30,80 +30,41 @@ function agentFor(path: string): string {
   );
 }
 
-/** Pad the action label so the trailing file note aligns in the checklist. */
-function row(label: string, file: string): string {
-  return step(label.padEnd(26), file);
-}
-
-/** The graphical result of a per-project setup. */
+/** Plain summary of a per-project setup. */
 export function renderProjectSetup(r: SetupResult): string {
-  const lines: string[] = [];
+  const lines: string[] = ["Cairn — project ready"];
   lines.push(
     r.initializedJournal
-      ? step("created shared memory".padEnd(26), ".agent/ journal")
-      : step("shared memory ready".padEnd(26), ".agent/ journal"),
+      ? "  ✓ created shared memory   .agent/ journal"
+      : "  ✓ shared memory ready     .agent/ journal",
   );
   for (const f of [...r.filesCreated, ...r.filesUpdated]) {
-    lines.push(row(`taught ${agentFor(f)}`, f));
+    lines.push(`  ✓ taught ${agentFor(f)}: ${f}`);
   }
   if (r.filesCreated.length + r.filesUpdated.length === 0) {
-    lines.push(style.dim("agents already up to date"));
+    lines.push("  · agents already up to date");
   }
   if (r.gitHook) {
-    lines.push(step("git auto-capture".padEnd(26), "post-commit hook"));
+    lines.push("  ✓ git auto-capture        post-commit hook");
   }
-
-  const next = box(
-    "What happens now",
-    [
-      "Your AI agents read & write a shared memory journal",
-      "as they work — no MCP, no manual steps.",
-      "",
-      `${style.cyan("cairn status")}     ${style.dim("see the current state")}`,
-      `${style.cyan("cairn timeline")}   ${style.dim("what happened, by day")}`,
-      `${style.cyan("cairn context")}    ${style.dim("compact context for a prompt")}`,
-    ],
-    { color: style.gray },
-  );
-
-  return [
-    banner(),
-    box("Project ready", lines),
-    "",
-    next,
-    "",
-  ].join("\n");
+  lines.push("");
+  lines.push("Next: cairn status · cairn timeline · cairn context");
+  return lines.join("\n");
 }
 
-/** The graphical result of the global bootstrap install. */
+/** Plain summary of the global bootstrap install. */
 export function renderGlobalSetup(r: GlobalSetupResult): string {
-  const lines: string[] = [];
+  const lines: string[] = ["Cairn — installed globally"];
   const touched = [...r.filesCreated, ...r.filesUpdated];
   if (touched.length) {
-    for (const f of touched) lines.push(row(`taught ${agentFor(f)}`, `~/${f}`));
+    for (const f of touched) lines.push(`  ✓ taught ${agentFor(f)}: ~/${f}`);
   } else {
-    lines.push(style.dim("global agent rules already current"));
+    lines.push("  · global agent rules already current");
   }
-
-  const next = box(
-    "What happens now",
-    [
-      `Installed ${style.bold("once")} — you never set up a project again.`,
-      "",
-      "When an agent opens any repo without a journal, it will",
-      `run ${style.cyan("cairn setup")} itself and start recording.`,
-      "",
-      `${style.dim("undo:")} cairn uninstall-global`,
-    ],
-    { color: style.gray },
+  lines.push("");
+  lines.push(
+    "Agents will ask before setting up a repo that has no .agent/ journal.",
   );
-
-  return [
-    banner(),
-    box("Installed globally", lines),
-    "",
-    next,
-    "",
-  ].join("\n");
+  lines.push("Undo: cairn uninstall-global");
+  return lines.join("\n");
 }
-
