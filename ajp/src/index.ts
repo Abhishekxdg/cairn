@@ -40,4 +40,4 @@ export * from "./setup/global.js";
 export { RULES_BODY, rulesBlock, GLOBAL_RULES_BODY, globalRulesBlock } from "./setup/rules.js";
 
 /** Package version. */
-export const VERSION = "0.1.1";
+export const VERSION = "0.1.2";

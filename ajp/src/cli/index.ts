@@ -17,7 +17,7 @@ import { setupProject } from "../setup/install.js";
 import { installGlobal, uninstallGlobal } from "../setup/global.js";
 import { renderProjectSetup, renderGlobalSetup } from "./screens.js";
 
-const VERSION = "0.1.1";
+const VERSION = "0.1.2";
 
 // --- styling -----------------------------------------------------------------
 const useColor = process.stdout.isTTY && process.env["NO_COLOR"] === undefined;
@@ -72,7 +72,7 @@ ${c.bold("COMMANDS")}
   timeline                   Human-readable timeline (--since <seq> --type T)
   recall                     Instant "where were we" (also written to .agent/CONTEXT.md)
   context [--level L]        Compile minimum-token context (small|medium|large|full)
-  sync                       Auto-capture file events from git history (--full)
+  sync                       Capture commits as events + extract decisions (--full, --no-extract)
   snapshot                   Force a state snapshot
   compact                    Cold-archive old events + reclaim space (--keep-recent N)
   prune                      Disconnect stale agents (--idle-ms N)
@@ -226,15 +226,21 @@ const commands: Record<string, Handler> = {
     const r = requireRoot();
     const store = openStore();
     try {
-      const res = syncGit(store, r, { full: Boolean(flags["full"]) });
+      const res = syncGit(store, r, {
+        full: Boolean(flags["full"]),
+        extractIntent: !flags["no-extract"],
+      });
       writeContextFile(store, r); // keep instant-recall file current
       if (flags["json"]) return out(JSON.stringify(res, null, 2));
       if (!res.synced) return out(c.yellow("⚠ Not a git repo — nothing to sync."));
-      out(res.events
-        ? c.green(`✔ Captured ${res.commits} commit(s) → ${res.events} event(s) from git`)
-        : c.dim(res.toCommit && !res.fromCommit
-            ? "Baseline set at HEAD — future commits will be captured automatically."
-            : "Already up to date with git."));
+      if (res.events) {
+        out(c.green(`✔ Captured ${res.commits} commit(s) → ${res.events} event(s) from git`));
+        if (res.decisions) out(c.dim(`  extracted ${res.decisions} decision(s) from commit messages`));
+      } else {
+        out(c.dim(res.toCommit && !res.fromCommit
+          ? "Baseline set at HEAD — future commits will be captured automatically."
+          : "Already up to date with git."));
+      }
     } finally { store.close(); }
   },
 

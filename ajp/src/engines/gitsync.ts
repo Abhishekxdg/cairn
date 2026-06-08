@@ -34,8 +34,81 @@ export interface GitSyncResult {
   synced: boolean;
   commits: number;
   events: number;
+  /** Decisions auto-extracted from commit messages. */
+  decisions: number;
   fromCommit: string | null;
   toCommit: string | null;
+}
+
+/** Verbs that signal a durable decision in a commit subject. */
+const DECISION_RE =
+  /\b(use|using|adopt|adopted|switch to|switched to|migrate to|migrated to|move to|moved to|replace[d]? .+ with|go with|went with|standardi[sz]e on|chose|choose|decided to)\b/i;
+
+/**
+ * Extract durable DECISIONS from a commit message — the intent git can't infer
+ * from a diff. Two precisions:
+ *   - structured: body lines `Decision: …` (+ optional `Reason:/Why:/Because:`)
+ *   - heuristic:  a subject whose verb signals a decision (use/adopt/switch…)
+ * Returns proposed `decision.made` events, tagged + idempotent by commit sha.
+ */
+export function extractIntent(root: string, c: CommitMeta): NewEvent[] {
+  let body = "";
+  try {
+    body = git(root, ["log", "-1", "--format=%B", c.sha]).trim();
+  } catch {
+    body = c.message;
+  }
+  const lines = body.split("\n");
+  const events: NewEvent[] = [];
+  const decision = (
+    decId: string,
+    title: string,
+    rationale: string,
+    confidence: string,
+  ): NewEvent => ({
+    type: "decision.made",
+    id: decId,
+    actor: c.author,
+    timestamp: c.date,
+    payload: {
+      id: decId,
+      title,
+      rationale,
+      madeBy: c.author,
+      commit: c.sha,
+      source: "git-extracted",
+      confidence,
+    },
+  });
+
+  // 1. Structured `Decision:` / `Reason:` lines (high precision).
+  let n = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i]!.match(/^\s*decision:\s*(.+\S)\s*$/i);
+    if (!m) continue;
+    let reason = "";
+    for (let j = i + 1; j < Math.min(lines.length, i + 4); j++) {
+      const r = lines[j]!.match(/^\s*(?:reason|why|because):\s*(.+\S)\s*$/i);
+      if (r) { reason = r[1]!; break; }
+    }
+    events.push(decision(`gitdecision:${c.sha}:${n}`, m[1]!, reason, "structured"));
+    n++;
+  }
+  if (n > 0) return events; // structured wins; don't double-count the subject
+
+  // 2. Heuristic: a subject whose verb signals a decision.
+  const subject = (lines[0] ?? c.message).replace(/^\w+(\([^)]+\))?:\s*/, "").trim();
+  if (DECISION_RE.test(subject)) {
+    events.push(
+      decision(
+        `gitdecision:${c.sha}`,
+        subject.charAt(0).toUpperCase() + subject.slice(1),
+        `from commit ${c.sha.slice(0, 7)}`,
+        "heuristic",
+      ),
+    );
+  }
+  return events;
 }
 
 interface CommitMeta {
@@ -95,11 +168,12 @@ function fileEventsForCommit(
 export function syncGit(
   store: EventStore,
   root: string,
-  opts: { full?: boolean } = {},
+  opts: { full?: boolean; extractIntent?: boolean } = {},
 ): GitSyncResult {
+  const extract = opts.extractIntent !== false;
   const info = detectGit(root);
   if (!info.isRepo) {
-    return { synced: false, commits: 0, events: 0, fromCommit: null, toCommit: null };
+    return { synced: false, commits: 0, events: 0, decisions: 0, fromCommit: null, toCommit: null };
   }
 
   let head: string;
@@ -107,7 +181,7 @@ export function syncGit(
     head = git(root, ["rev-parse", "HEAD"]).trim();
   } catch {
     // Repo with no commits yet.
-    return { synced: true, commits: 0, events: 0, fromCommit: null, toCommit: null };
+    return { synced: true, commits: 0, events: 0, decisions: 0, fromCommit: null, toCommit: null };
   }
 
   const last = store.getMeta(META_LAST) ?? null;
@@ -115,10 +189,10 @@ export function syncGit(
   // First-ever sync without --full: record the baseline, capture nothing.
   if (!last && !opts.full) {
     store.setMeta(META_LAST, head);
-    return { synced: true, commits: 0, events: 0, fromCommit: null, toCommit: head };
+    return { synced: true, commits: 0, events: 0, decisions: 0, fromCommit: null, toCommit: head };
   }
   if (last === head) {
-    return { synced: true, commits: 0, events: 0, fromCommit: last, toCommit: head };
+    return { synced: true, commits: 0, events: 0, decisions: 0, fromCommit: last, toCommit: head };
   }
 
   const range = last ? `${last}..HEAD` : "HEAD";
@@ -132,7 +206,7 @@ export function syncGit(
       range,
     ]).trim();
   } catch {
-    return { synced: false, commits: 0, events: 0, fromCommit: last, toCommit: head };
+    return { synced: false, commits: 0, events: 0, decisions: 0, fromCommit: last, toCommit: head };
   }
 
   const commits: CommitMeta[] = log
@@ -143,6 +217,7 @@ export function syncGit(
     : [];
 
   const events: NewEvent[] = [];
+  let decisions = 0;
   for (const c of commits) {
     events.push({
       type: "git.commit",
@@ -157,6 +232,11 @@ export function syncGit(
       },
     });
     events.push(...fileEventsForCommit(root, c, info.branch));
+    if (extract) {
+      const intent = extractIntent(root, c);
+      decisions += intent.length;
+      events.push(...intent);
+    }
   }
 
   if (events.length) store.batchAppend(events);
@@ -166,6 +246,7 @@ export function syncGit(
     synced: true,
     commits: commits.length,
     events: events.length,
+    decisions,
     fromCommit: last,
     toCommit: head,
   };

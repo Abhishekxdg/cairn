@@ -267,7 +267,7 @@ export class AgentJournal {
    * Auto-capture file events from git history (zero agent effort). Idempotent;
    * typically wired to a git post-commit hook by `ajp setup`.
    */
-  sync(opts: { full?: boolean } = {}): GitSyncResult {
+  sync(opts: { full?: boolean; extractIntent?: boolean } = {}): GitSyncResult {
     const root = this.dbPath ? this.cwd : this.root;
     const res = syncGit(this.db, root, opts);
     try {

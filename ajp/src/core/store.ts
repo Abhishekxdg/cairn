@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import type { Database as DB, Statement } from "better-sqlite3";
-import { mkdirSync, existsSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, existsSync, appendFileSync, writeFileSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type {
   JournalEvent,
   NewEvent,
@@ -24,6 +24,12 @@ export class EventStore {
   readonly db: DB;
   private readonly insertStmt: Statement;
   private readonly byIdStmt: Statement;
+  /**
+   * Path to the committed, merge-friendly `events.jsonl` — the portable SOURCE
+   * OF TRUTH. The SQLite db is a fast, git-ignored cache rebuilt from it.
+   * `null` for in-memory/readonly stores (no mirror).
+   */
+  private readonly jsonlPath: string | null;
 
   constructor(
     dbPath: string,
@@ -33,6 +39,10 @@ export class EventStore {
       mkdirSync(dirname(dbPath), { recursive: true });
     }
     this.db = new Database(dbPath, { readonly: opts.readonly ?? false });
+    this.jsonlPath =
+      dbPath === ":memory:" || opts.readonly
+        ? null
+        : join(dirname(dbPath), "events.jsonl");
     if (!opts.readonly) {
       // Durability + concurrency tuning. WAL allows one writer + many readers;
       // busy_timeout makes concurrent writers wait rather than fail; NORMAL
@@ -50,6 +60,70 @@ export class EventStore {
        VALUES (@id, @timestamp, @actor, @sessionId, @projectId, @type, @version, @payload)`,
     );
     this.byIdStmt = this.db.prepare("SELECT * FROM events WHERE id = ?");
+    if (!opts.readonly) this.reconcileJsonl();
+  }
+
+  /** Insert a fully-formed event row with an explicit seq (used by rehydrate). */
+  private insertWithSeq(e: JournalEvent): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO events
+           (seq, id, timestamp, actor, session_id, project_id, type, version, payload)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        e.seq,
+        e.id,
+        e.timestamp,
+        e.actor,
+        e.sessionId,
+        e.projectId,
+        e.type,
+        e.version,
+        JSON.stringify(e.payload ?? {}),
+      );
+  }
+
+  /** Append one event line to the committed `events.jsonl` mirror. */
+  private mirror(e: JournalEvent): void {
+    if (!this.jsonlPath) return;
+    appendFileSync(this.jsonlPath, JSON.stringify(e) + "\n");
+  }
+
+  /**
+   * Reconcile the SQLite cache with the committed `events.jsonl` source of truth.
+   * - jsonl present, db empty → rebuild the db from jsonl (e.g. fresh clone).
+   * - db ahead of jsonl (legacy db, or jsonl missing) → (re)write jsonl from db.
+   * - counts equal → trust (the common, no-op case).
+   */
+  private reconcileJsonl(): void {
+    if (!this.jsonlPath) return;
+    const dbCount = this.totalCount(); // hot + cold-archived
+    const lines = existsSync(this.jsonlPath)
+      ? readFileSync(this.jsonlPath, "utf8").split("\n").filter((l) => l.trim())
+      : [];
+
+    if (lines.length === dbCount) return; // in sync
+
+    if (dbCount === 0 && lines.length > 0) {
+      // Rebuild cache from the source of truth.
+      const tx = this.db.transaction(() => {
+        for (const line of lines) {
+          try {
+            this.insertWithSeq(JSON.parse(line) as JournalEvent);
+          } catch {
+            /* skip a corrupt line */
+          }
+        }
+      });
+      tx();
+    } else if (dbCount > lines.length) {
+      // db is the only complete copy (legacy/pre-jsonl) → materialize jsonl.
+      const all = this.queryEvents({});
+      writeFileSync(this.jsonlPath, all.map((e) => JSON.stringify(e)).join("\n") + "\n");
+    }
+    // (lines.length > dbCount but db non-empty is unusual; leave both — the
+    //  next append keeps appending; a manual `ajp repair` can force a rebuild.)
   }
 
   /** Project id stamped onto appended events. */
@@ -103,7 +177,7 @@ export class EventStore {
       // Duplicate id — return the already-stored event (idempotency).
       return this.hydrate(this.byIdStmt.get(row.id) as RawRow) as JournalEvent<P>;
     }
-    return {
+    const event: JournalEvent<P> = {
       seq: Number(info.lastInsertRowid),
       id: row.id,
       timestamp: row.timestamp,
@@ -114,6 +188,9 @@ export class EventStore {
       version: row.version,
       payload: (input.payload ?? {}) as P,
     };
+    // Mirror to the committed source-of-truth log (only real, new events).
+    this.mirror(event);
+    return event;
   }
 
   /**

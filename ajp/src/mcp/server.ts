@@ -17,7 +17,7 @@ import { createSnapshot } from "../engines/snapshots.js";
  * source of truth. Operates on the project at `AJP_ROOT` (env) or the cwd.
  */
 
-const PKG_VERSION = "0.1.1";
+const PKG_VERSION = "0.1.2";
 
 function resolveRoot(): string {
   return process.env["AJP_ROOT"] ?? requireRoot();

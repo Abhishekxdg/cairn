@@ -151,18 +151,21 @@ ajp doctor                    # health + integrity
 ```text
 .agent/
 ├── manifest.json     # protocol version, projectId, name
-├── journal.db        # SQLite (WAL) — the source of truth
-├── snapshots/        # materialized state caches (rebuildable)
+├── events.jsonl      # ⭐ append-only SOURCE OF TRUTH — committed, merge-friendly
+├── CONTEXT.md        # tiny always-current "where were we" (committed; instant recall)
+├── journal.db        # SQLite (WAL) — fast CACHE, git-ignored, rebuilt from events.jsonl
+├── snapshots/        # materialized state caches (git-ignored)
 ├── artifacts/        # large outputs referenced by events
-├── state/            # derived state exports (git-ignored)
-├── schemas/          # event payload schemas
-├── indexes/ locks/   # derived/optimization (git-ignored)
-└── events/           # optional JSONL export mirror (portability)
+├── state/ indexes/ locks/   # derived/optimization (git-ignored)
+└── schemas/          # event payload schemas
 ```
 
-Derived/optimization files are **git-ignored** by default — the journal is the
-only thing worth committing, and it never produces merge-conflict-heavy
-generated artifacts. See [ARCHITECTURE.md](docs/ARCHITECTURE.md).
+**The committed source of truth is `events.jsonl`** — append-only and
+line-based, so it merges cleanly across branches. The SQLite `journal.db` is a
+fast query cache: it's git-ignored and **rebuilt deterministically from
+`events.jsonl`** on open (same `seq`, same `id`). So a fresh clone has no db yet
+— the first command rebuilds it. No binary-merge conflicts; `git` stays happy.
+See [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## The event model
 
@@ -231,9 +234,13 @@ solves it by reading git instead of asking agents to hand-narrate file edits:
 - Every commit becomes `file.created` / `file.modified` / `file.deleted` events
   plus a `git.commit` record, **attributed to the commit author**, derived
   deterministically (idempotent — re-syncing never duplicates).
+- **Intent is extracted too.** `sync` reads commit messages and auto-records
+  decisions — structured (`Decision: …` / `Reason: …` lines) or heuristic (a
+  subject like "switch to PostgreSQL"), tagged `source: git-extracted`. So even
+  decisions land with near-zero effort. Disable with `ajp sync --no-extract`.
 - So even if an agent logs nothing, the journal still knows what changed, who
-  changed it, and when — because git does. Agents only record **intent** git
-  can't know: goals, decisions (with reasons), knowledge, and task lifecycle.
+  changed it, why, and when — because git does. Agents need only record the
+  intent git truly can't see (goals, nuanced rationale, task lifecycle).
 
 ```bash
 ajp sync            # capture commits since the last sync (the hook does this for you)

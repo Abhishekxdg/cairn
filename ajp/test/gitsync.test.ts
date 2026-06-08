@@ -125,3 +125,59 @@ describe("git auto-capture", () => {
     s.close();
   });
 });
+
+describe("intent auto-extraction from commit messages", () => {
+  it("extracts a structured `Decision:`/`Reason:` into an active decision", () => {
+    const dir = repo();
+    commit(dir, "seed", "x", "init");
+    const s = store(dir);
+    syncGit(s, dir); // baseline
+    const opt = { cwd: dir, stdio: "ignore" as const };
+    writeFileSync(join(dir, "q.ts"), "x");
+    execFileSync("git", ["add", "-A"], opt);
+    execFileSync("git", ["commit", "-qm", "add queue\n\nDecision: Use BullMQ\nReason: reliable retries"], opt);
+
+    const r = syncGit(s, dir);
+    expect(r.decisions).toBeGreaterThanOrEqual(1);
+    const active = deriveState(s).decisions.filter((d) => d.status === "active");
+    const bull = active.find((d) => d.title === "Use BullMQ");
+    expect(bull?.rationale).toBe("reliable retries");
+    s.close();
+  });
+
+  it("extracts a heuristic decision from a decisive subject", () => {
+    const dir = repo();
+    commit(dir, "seed", "x", "init");
+    const s = store(dir);
+    syncGit(s, dir);
+    commit(dir, "db.ts", "x", "switch to PostgreSQL for storage");
+    const r = syncGit(s, dir);
+    expect(r.decisions).toBe(1);
+    const d = deriveState(s).decisions.find((x) => /PostgreSQL/.test(x.title));
+    expect(d).toBeTruthy();
+    expect(d?.madeBy).toBe("Dev");
+    s.close();
+  });
+
+  it("does not invent a decision from an ordinary commit", () => {
+    const dir = repo();
+    commit(dir, "seed", "x", "init");
+    const s = store(dir);
+    syncGit(s, dir);
+    commit(dir, "a.ts", "x", "fix typo in readme");
+    const r = syncGit(s, dir);
+    expect(r.decisions).toBe(0);
+    s.close();
+  });
+
+  it("--no-extract disables extraction", () => {
+    const dir = repo();
+    commit(dir, "seed", "x", "init");
+    const s = store(dir);
+    syncGit(s, dir);
+    commit(dir, "b.ts", "x", "use Redis for caching");
+    const r = syncGit(s, dir, { extractIntent: false });
+    expect(r.decisions).toBe(0);
+    s.close();
+  });
+});
