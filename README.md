@@ -1,190 +1,131 @@
-# Cairn (Cairn)
+# Cairn
 
-**The Git of AI memory.** Local-first cognition infrastructure for AI agents.
+**An append-only journal for AI agents. Git-like memory, without the complexity.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](package.json)
+[![npm](https://img.shields.io/badge/npm-%40memxai%2Fcairn-red.svg)](https://www.npmjs.com/package/@memxai/cairn)
 
-A universal, event-sourced memory protocol for AI agents. Everything an agent
-learns, decides, creates, modifies, observes and completes becomes an immutable
-event in an append-only journal. **Memory, state, tasks, handoffs, context,
-coordination and knowledge are all *derived* from that journal** — never stored
-separately, never the source of truth.
+Every coding agent starts each session blind. It re-reads your repo to figure out
+what's going on, can't see what another agent already did, and forgets every
+decision the moment the session ends. Cairn fixes that with one idea borrowed from
+git: a small, shared, append-only **journal** in your project's `.agent/`
+directory that records goals, decisions, tasks and knowledge as they happen — and
+that any agent can read in a single cheap step.
 
-```text
-History is truth.   State is a cache.   Snapshots are an optimization.   Events are forever.
-```
-
-This is **not** a vector database, a RAG product, a memory framework, a task
-manager, or an agent framework. It is the foundational layer those things should
-be built *on top of*.
+`.agent/` is to AI memory what `.git` is to source.
 
 ---
 
-## Why
+## Why it's useful
 
-Every agent today reconstructs context from scratch, can't see what another
-agent did, and loses decisions across sessions. The fix isn't a smarter cache —
-it's a shared, durable, append-only record of cognition that any tool can read
-and write. The `.agent/` directory is to AI memory what `.git` is to source.
+### 1. Token savings — orient in one read, not a repo scan
 
-- **Local-first.** No cloud, no accounts, no telemetry, no proprietary storage.
-- **Concurrency-safe.** SQLite + WAL: many agents (Claude Code, Codex, Cursor,
-  OpenHands) append simultaneously with no lost updates, no corruption.
-- **Model/framework/language agnostic.** The journal is just events.
-- **Derivable.** Lose every cache and snapshot and you lose nothing — state
-  rebuilds from history.
+The expensive part of every agent session is **orientation**: before it can do
+anything, the agent burns tokens re-discovering the project — grepping, opening
+files, reconstructing "where were we." On a real codebase that's easily
+**hundreds of thousands of tokens, every session, repeated from zero.**
 
-## Install — once, globally (recommended)
+Cairn keeps an always-current `CONTEXT.md` — goal, current task, active decisions,
+recent activity, next steps — derived automatically from the journal. The agent
+reads **that one small file** (a few hundred tokens) instead of scanning the repo.
 
-Install it one time on your machine; your agents set up every project for you
-after that — you never run per-project install again.
+```bash
+cairn recall          # the entire "where were we" in one cheap read
+cairn context --level small   # token-budgeted context for a prompt
+```
+
+Orientation cost drops from a repo-scan to a single file read. That gap is the
+whole point — Cairn is a **token-cheap memory layer**, not another thing to grep.
+
+### 2. Multi-agent — shared memory, no lost work
+
+Run Claude Code, Codex, Cursor and OpenHands on the same repo and today they each
+live in their own bubble. One refactors, another undoes it; a decision made in one
+session is invisible to the next.
+
+Cairn is a **single shared journal** all of them read and write:
+
+- **Concurrency-safe.** SQLite + WAL — many agents append at once, no lost
+  updates, no corruption.
+- **One source of truth for intent.** A decision recorded once (`Use SQLite —
+  WAL concurrency`) is visible to every other agent and every future session.
+- **Supersede, don't contradict.** A new decision that replaces an old one flips
+  the old to `superseded`, so everyone sees exactly *one* active answer.
+- **Survives sessions.** Close the laptop, come back next week, different agent —
+  the context is still there.
+
+### 3. Zero-effort capture — it reads git, not your narration
+
+The hard part of any memory system is getting accurate data *in*. Cairn doesn't
+ask agents to hand-log file edits — it reads **git**. A post-commit hook turns
+every commit into file events + a commit record, attributed to the author, and
+even extracts decisions from commit messages. So even if an agent logs nothing,
+the journal still knows what changed, who changed it, and when.
+
+Agents only record the **intent git can't see** — goals, rationale, task
+lifecycle. Everything else is automatic.
+
+### 4. Local-first — no cloud, no lock-in
+
+No accounts, no telemetry, no proprietary storage. The source of truth is a
+plain, line-based `events.jsonl` committed with your repo (merges cleanly across
+branches). The SQLite cache is git-ignored and rebuilt deterministically from it —
+lose every cache and you lose nothing.
+
+---
+
+## Install
+
+One global install; your agents set up every project for you after that.
 
 ```bash
 npm install -g @memxai/cairn
 ```
 
-You're greeted with a graphical setup (truecolor banner + boxes in a real
-terminal; clean plain text when piped):
+This teaches your agents (via their existing instruction files —
+`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, etc.) one rule: *"when you open a repo
+with no `.agent/`, run `cairn setup` first."* From then on, the agent creates the
+journal and starts recording on its first visit — no MCP wiring, no per-project
+install. Your own content in those files is preserved (Cairn lives in a managed
+block).
 
-```text
-  █████╗      ██╗██████╗
- ██╔══██╗     ██║██╔══██╗
- ███████║     ██║██████╔╝
- ██╔══██║██   ██║██╔═══╝
- ██║  ██║╚█████╔╝██║
- ╚═╝  ╚═╝ ╚════╝ ╚═╝
-  Cairn  ·  the Git of AI memory
+Prefer per-project? `npm install --save-dev @memxai/cairn` does the same setup for
+one repo.
 
-  ╭─ Installed globally ───────────────────────────────────╮
-  │ ✓ taught all agents      ~/.config/cairn/AGENTS.md       │
-  │ ✓ taught Claude Code     ~/.claude/CLAUDE.md           │
-  ╰────────────────────────────────────────────────────────╯
+---
 
-  ╭─ What happens now ──────────────────────────────────────╮
-  │ Installed once — you never set up a project again.      │
-  │                                                         │
-  │ When an agent opens any repo without a journal, it will │
-  │ run cairn setup itself and start recording.               │
-  ╰─────────────────────────────────────────────────────────╯
-```
+## How agents use it
 
-The global `postinstall` writes a tiny **bootstrap rule** into your *global*
-agent files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, a generic
-`~/.config/cairn/AGENTS.md`, plus `~/.gemini/GEMINI.md` if present). That rule
-tells every agent:
-
-> "When you start in a repo that has no `.agent/`, run `cairn setup` first."
-
-So from now on, the **agent** creates the journal and wires the project on its
-first visit — automatically. Your own content in those global files is kept (the
-rule lives in a managed `<!-- CAIRN-GLOBAL:… -->` block). Undo anytime with
-`cairn uninstall-global`; re-run with `cairn install-global`.
-
-### Or: per-project install (no global)
+**Read before you write.** At session start, one cheap read:
 
 ```bash
-cd your-project
-npm install --save-dev @memxai/cairn
+cairn recall          # or: cairn context --level small
 ```
 
-A `postinstall` step then automatically:
-
-1. **Creates the `.agent/` journal** in your project.
-2. **Teaches every coding agent how to use it** — it writes the Cairn usage rules
-   into the instruction files agents already read on their own
-   (`AGENTS.md`, `CLAUDE.md`, and any existing `GEMINI.md` / `.cursorrules` /
-   `.github/copilot-instructions.md`). Your own content in those files is kept;
-   the Cairn rules go in a managed block between markers.
-
-No MCP, no manual wiring. The next time Claude Code, Codex, Cursor, Copilot or
-Gemini opens the repo, it reads those rules and starts recording to the journal
-with the `cairn` CLI.
-
-Re-run anytime with `cairn setup` (add `--all` to also create the secondary agent
-files). Opt out of the auto-step with `CAIRN_NO_POSTINSTALL=1`. Prefer it global?
-`npm install -g @memxai/cairn`, then `cairn setup` per project.
-
-### How your agents use it (the rules they're taught)
-
-Agents are instructed to: **read before they write** (`cairn context` at session
-start), then **record each real action as one event** — task created/started/
-completed, decision made (with a reason), knowledge learned, file modified — and
-to **never edit `.agent/` by hand** (it's append-only; history is truth). The
-full ruleset lives in [docs/AGENT_RULES.md](docs/AGENT_RULES.md) and is what gets
-injected into the agent files.
-
-## Quickstart (manual, if you skipped the package)
+**Record intent as it happens** — one event per real action:
 
 ```bash
-cd your-project
-cairn init          # journal + teach agents (same as the auto-setup)
-
-cairn append --type agent.registered --payload '{"name":"Claude Code"}' --actor "Claude Code"
-cairn append --type goal.created      --payload '{"id":"g1","title":"Launch MailMeld"}'
-cairn append --type task.created      --payload '{"id":"t1","title":"Build OAuth","priority":"high"}'
-cairn append --type task.started      --payload '{"id":"t1"}'
-cairn append --type decision.made     --payload '{"id":"d1","title":"Use SQLite","rationale":"WAL concurrency"}'
-
-cairn status
-cairn context --level small     # minimum-token context for an agent
-cairn timeline                  # human-readable "what happened"
-cairn doctor                    # health + integrity
+cairn append --type goal.created    --payload '{"id":"g1","title":"Ship v1"}'      --actor "Claude Code"
+cairn append --type task.started    --payload '{"id":"t1"}'                          --actor "Claude Code"
+cairn append --type decision.made   --payload '{"id":"d1","title":"Use SQLite","rationale":"WAL concurrency"}' --actor "Claude Code"
+cairn append --type task.completed  --payload '{"id":"t1"}'                          --actor "Claude Code"
 ```
 
-## Architecture (one screen)
+File changes are captured from git automatically — agents never log those.
 
-```text
-                 append events
-   agents  ─────────────────────►  .agent/journal.db  (SQLite, WAL, append-only)
-                                          │
-                                          │  pure, deterministic reducers
-                                          ▼
-                                    DerivedState
-                                          │
-        ┌──────────────┬─────────────┬────┴────────┬──────────────┐
-        ▼              ▼             ▼             ▼              ▼
-     state         context       timeline       memory        snapshots
-   (cache)       (compiler)    (what happened) (knowledge)  (optimization)
+### Find the right files without grepping blind
+
+Cairn ranks which files a task likely touches by fusing git history (files that
+change together) with a static code graph (imports + exported symbols) — so it
+works even on a fresh repo with no history.
+
+```bash
+cairn relevant "add oauth refresh"        # ranked files, token-free, no embeddings
+cairn context --task "add oauth refresh"  # project context + those files
 ```
 
-```text
-.agent/
-├── manifest.json     # protocol version, projectId, name
-├── events.jsonl      # ⭐ append-only SOURCE OF TRUTH — committed, merge-friendly
-├── CONTEXT.md        # tiny always-current "where were we" (committed; instant recall)
-├── journal.db        # SQLite (WAL) — fast CACHE, git-ignored, rebuilt from events.jsonl
-├── snapshots/        # materialized state caches (git-ignored)
-├── artifacts/        # large outputs referenced by events
-├── state/ indexes/ locks/   # derived/optimization (git-ignored)
-└── schemas/          # event payload schemas
-```
-
-**The committed source of truth is `events.jsonl`** — append-only and
-line-based, so it merges cleanly across branches. The SQLite `journal.db` is a
-fast query cache: it's git-ignored and **rebuilt deterministically from
-`events.jsonl`** on open (same `seq`, same `id`). So a fresh clone has no db yet
-— the first command rebuilds it. No binary-merge conflicts; `git` stays happy.
-See [ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
-## The event model
-
-Every event is immutable and shaped the same way:
-
-```jsonc
-{ "id": "01KT…", "seq": 42, "timestamp": "…", "actor": "Claude Code",
-  "sessionId": "…", "projectId": "…", "type": "decision.made",
-  "version": 1, "payload": { "title": "Use SQLite", "rationale": "WAL" } }
-```
-
-`seq` is a gap-free total order; `id` is a time-sortable ULID used for
-idempotency. Canonical types cover agents, goals, tasks, decisions, files,
-artifacts, knowledge, memory, messages, sessions and snapshots — plus open
-`custom.*` extensions. Full catalogue in [EVENT_MODEL.md](docs/EVENT_MODEL.md).
-
-Decisions and tasks have real lifecycles derived from events — e.g. a new
-`decision.made` with `supersedes` flips the prior decision to `superseded`, so
-consumers see exactly one active decision. See [PROTOCOL.md](docs/PROTOCOL.md).
+---
 
 ## SDK
 
@@ -199,13 +140,8 @@ journal.startTask(id);
 journal.decide({ title: "Use SQLite", rationale: "WAL concurrency" });
 
 const ctx = journal.getContext("small");   // compiled, minimum-token
-const state = journal.getState();           // full derived state
-const timeline = journal.renderTimeline();  // human-readable
 journal.completeTask(id);
 ```
-
-Low-level building blocks (`EventStore`, reducers, engines) are exported too.
-See [SDK.md](docs/SDK.md).
 
 ## MCP server
 
@@ -214,71 +150,33 @@ claude mcp add cairn -- cairn mcp
 ```
 
 Tools: `append_event`, `query_state`, `query_context`, `query_memory`,
-`query_timeline`, `register_agent`, `create_snapshot`, `get_active_tasks`,
-`get_active_decisions`. Resources: `cairn://state`, `cairn://context`.
-See [MCP.md](docs/MCP.md).
+`query_timeline`, `register_agent`, and more. Resources: `cairn://state`,
+`cairn://context`.
 
 ## CLI
 
 ```text
-cairn init | status | append | state | timeline | context | sync | snapshot
-        | compact | prune | export | doctor | migrate | repair | mcp
+cairn recall | status | context | relevant | append | timeline
+      | sync | snapshot | compact | prune | export | doctor | mcp
 ```
 
-### Git auto-capture (zero agent effort)
+---
 
-The hardest part of any agent-memory system is getting accurate data *in*. Cairn
-solves it by reading git instead of asking agents to hand-narrate file edits:
+## How it works (one paragraph)
 
-- `cairn setup` installs a git **post-commit hook** that runs `cairn sync`.
-- Every commit becomes `file.created` / `file.modified` / `file.deleted` events
-  plus a `git.commit` record, **attributed to the commit author**, derived
-  deterministically (idempotent — re-syncing never duplicates).
-- **Intent is extracted too.** `sync` reads commit messages and auto-records
-  decisions — structured (`Decision: …` / `Reason: …` lines) or heuristic (a
-  subject like "switch to PostgreSQL"), tagged `source: git-extracted`. So even
-  decisions land with near-zero effort. Disable with `cairn sync --no-extract`.
-- So even if an agent logs nothing, the journal still knows what changed, who
-  changed it, why, and when — because git does. Agents need only record the
-  intent git truly can't see (goals, nuanced rationale, task lifecycle).
+Agents **append events** to an append-only log. Everything else — current state,
+context, timeline, memory — is **derived** from that log by pure, deterministic
+reducers, never stored separately. History is the truth; state is just a cache;
+snapshots are an optimization. That's why it's safe under concurrency and why a
+fresh clone rebuilds perfectly from `events.jsonl`.
 
-```bash
-cairn sync            # capture commits since the last sync (the hook does this for you)
-cairn sync --full     # on first run, capture the entire history
+```text
+agents ──append──► events.jsonl (source of truth) ──reducers──► state · context · timeline · memory
 ```
 
-- `cairn compact [--keep-recent N]` — cold-archive old events behind a snapshot so
-  the hot table stays fast at scale (events are moved, never lost).
-- `cairn prune [--idle-ms N]` — disconnect stale agents (records `agent.disconnected`).
-
-## Performance
-
-| Operation            | Target    | Measured |
-| -------------------- | --------- | -------- |
-| Append event         | < 5 ms    | sub-ms (batched ~0.01 ms/event) |
-| State derive         | < 5 ms\*  | snapshot+tail, ms-scale on realistic boards |
-| Context generation   | < 50 ms   | ✓ (asserted at 10–20k events) |
-| Timeline generation  | < 50 ms   | ✓ |
-| Cold start           | < 200 ms  | ✓ on realistic journals |
-| Scale                | 10M+ events | paged streaming + cold-archive compaction |
-
-\* via snapshot + tail replay; full cold replay scales linearly and is the
-fallback. The numbers above are enforced by `test/perf.test.ts` at 10–20k events
-(realistic project size). At pathological scale (e.g. 200k *simultaneously
-active* tasks) materializing the full board costs more — run `npm run bench`
-(default 10M; pass a count) for stress numbers on your hardware. Memory stays
-flat under streaming regardless of journal size (`test/perf.test.ts` asserts a
-bounded heap delta over a 50k-event stream). See
-[CONCURRENCY.md](docs/CONCURRENCY.md) for the safety model.
-
-## Documentation
-
-- [ARCHITECTURE.md](docs/ARCHITECTURE.md) — components and data flow
-- [PROTOCOL.md](docs/PROTOCOL.md) — the protocol specification
-- [EVENT_MODEL.md](docs/EVENT_MODEL.md) — event types and payloads
-- [CONCURRENCY.md](docs/CONCURRENCY.md) — the no-lost-updates guarantee
-- [MCP.md](docs/MCP.md) · [SDK.md](docs/SDK.md) · [MIGRATIONS.md](docs/MIGRATIONS.md)
-- [ROADMAP.md](docs/ROADMAP.md) · [CONTRIBUTING.md](CONTRIBUTING.md)
+See [ARCHITECTURE.md](docs/ARCHITECTURE.md) · [PROTOCOL.md](docs/PROTOCOL.md) ·
+[EVENT_MODEL.md](docs/EVENT_MODEL.md) · [CONCURRENCY.md](docs/CONCURRENCY.md) ·
+[MCP.md](docs/MCP.md) · [SDK.md](docs/SDK.md) · [ROADMAP.md](docs/ROADMAP.md).
 
 ## License
 
