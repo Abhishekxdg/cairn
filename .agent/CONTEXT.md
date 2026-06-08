@@ -1,6 +1,6 @@
 # Where we are
 
-Goal: Ship AJP v0.1
+Goal: Ship Cairn v0.1
 Current: (nothing in progress)
 
 Active decisions:
@@ -12,13 +12,13 @@ Open tasks:
 - (none)
 
 Next:
-1. Break the goal "Ship AJP v0.1" into tasks
+1. Break the goal "Ship Cairn v0.1" into tasks
 
 Recent activity:
 - Decision: Post-commit hook auto-commits the journal — sync runs after a commit and mutates .agent/, which previously dangled as a dirty tree and never got committed; hook now makes a follow-up chore(cairn): sync journal commit guarded by CAIRN_SKIP_HOOK (no recursion), and gitsync ignores .agent/ so the journal never journals itself — Claude Code _(6m)_
-- Learned: Project name is Cairn (npm: cairn; bins: cairn, cairn-mcp). Superseded ajp/agent-journal-protocol and legacy stated. Journal dir stays .agent/. — Claude-rename _(4m)_
+- Learned: Project name is Cairn (npm: cairn; bins: cairn, cairn-mcp). Superseded ajp/agent-journal-protocol and legacy stated. Journal dir stays .agent/. — Claude-rename _(5m)_
 - git.commit — abhishek462307 _(now)_
 - Modified bin/cairn-mcp.js — abhishek462307 _(now)_
-- git.commit — abhishek462307 _(now)_
+- git.commit — abhishek462307 _(1m)_
 
-_seq 1481 · ~340 tokens · regenerated automatically — do not edit_
+_seq 1576 · ~341 tokens · 1 commit since · regenerated automatically — do not edit_
