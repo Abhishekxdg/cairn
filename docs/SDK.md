@@ -7,7 +7,7 @@ every read is a projection over the journal.
 ## Install & import
 
 ```ts
-import { AgentJournal } from "cairn";
+import { AgentJournal } from "@memxai/cairn";
 
 const journal = new AgentJournal({ actor: "Claude Code" });
 ```
@@ -80,7 +80,7 @@ The store, reducers and engines are exported for embedding or building custom
 projections:
 
 ```ts
-import { EventStore, foldState, deriveState, compileContext } from "cairn";
+import { EventStore, foldState, deriveState, compileContext } from "@memxai/cairn";
 
 const store = new EventStore(":memory:", { projectId: "demo" });
 store.appendEvent({ type: "task.created", payload: { id: "t1", title: "X" } });

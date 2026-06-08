@@ -1,7 +1,10 @@
 {
-  "name": "cairn",
+  "name": "@memxai/cairn",
   "version": "0.1.2",
-  "description": "The Git of AI memory — a universal, local-first, event-sourced memory protocol for AI agents. Everything (memory, state, tasks, context) is derived from an append-only journal.",
+  "description": "Cairn — an append-only journal for AI agents. Git-like memory, without the complexity.",
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "license": "MIT",
   "author": "Cairn contributors",

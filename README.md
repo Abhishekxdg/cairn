@@ -41,7 +41,7 @@ Install it one time on your machine; your agents set up every project for you
 after that — you never run per-project install again.
 
 ```bash
-npm install -g cairn
+npm install -g @memxai/cairn
 ```
 
 You're greeted with a graphical setup (truecolor banner + boxes in a real
@@ -85,7 +85,7 @@ rule lives in a managed `<!-- CAIRN-GLOBAL:… -->` block). Undo anytime with
 
 ```bash
 cd your-project
-npm install --save-dev cairn
+npm install --save-dev @memxai/cairn
 ```
 
 A `postinstall` step then automatically:
@@ -103,7 +103,7 @@ with the `cairn` CLI.
 
 Re-run anytime with `cairn setup` (add `--all` to also create the secondary agent
 files). Opt out of the auto-step with `CAIRN_NO_POSTINSTALL=1`. Prefer it global?
-`npm install -g cairn`, then `cairn setup` per project.
+`npm install -g @memxai/cairn`, then `cairn setup` per project.
 
 ### How your agents use it (the rules they're taught)
 
@@ -189,7 +189,7 @@ consumers see exactly one active decision. See [PROTOCOL.md](docs/PROTOCOL.md).
 ## SDK
 
 ```ts
-import { AgentJournal } from "cairn";
+import { AgentJournal } from "@memxai/cairn";
 
 const journal = new AgentJournal({ actor: "Claude Code" });
 journal.registerAgent();
