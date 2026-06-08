@@ -75,6 +75,57 @@ lose every cache and you lose nothing.
 
 ---
 
+## Benchmarks — with vs without Cairn
+
+The whole pitch is **orientation cost**: how many tokens an agent burns to answer
+*"where were we?"* before it can do any real work. Measured on this repo with
+`npm run wedge`:
+
+### Orientation token cost
+
+| Approach | What the agent reads | Tokens to orient |
+|---|---|---|
+| **Without Cairn** | git log + the 6 most-recently-changed files (what a cold agent actually does) | **78,912** |
+| **With Cairn** | one `CONTEXT.md` read | **508** |
+| **Difference** | | **~155× cheaper** |
+
+> Reproduce: `npm run wedge` (or `node scripts/wedge-eval.mjs`). Numbers scale with
+> repo size — the bigger the codebase, the wider the gap, because the "without"
+> column is a repo scan and the "with" column is a fixed ~1 KB file.
+
+That's per session, per agent. A team of 4 agents opening the repo 10×/day pays the
+"without" cost **40 times a day** — ~3.16M tokens/day on this repo — versus ~20k
+with Cairn.
+
+### It's not just cheaper — it's correct
+
+The token ratio undersells it. `CONTEXT.md` carries facts a cold agent **cannot
+reconstruct from code at any token cost**, because git shows *what* changed, never
+*why it was decided*:
+
+| Fact in `CONTEXT.md` | On this repo | Recoverable from a repo scan? |
+|---|---|---|
+| Current goal | "Ship Cairn v0.1" | Guessable, often wrong |
+| Active decisions **+ rationale** | 8 | ❌ No — reasons aren't in the code |
+| Recommended next action | 1 | ❌ No |
+| Recent activity | 2 lines | Partially (git log) |
+
+### Real-world A/B (third-party agent)
+
+Same external agent (Codex), same repo, same prompt *"where were we?"*, the only
+difference being journal access:
+
+| | Without journal | With `CONTEXT.md` |
+|---|---|---|
+| Time to orient | 24 s | **17 s** |
+| Outcome | Oriented to the **wrong project** (reconstructed stale work from the dirty tree), about to act on it | Oriented **correctly** — goal, the SQLite-WAL decision *with its reason*, the next step |
+| Wrong/duplicate-work risk | High | None |
+
+Without the journal a capable agent was *faster at being wrong*. That's the failure
+Cairn removes.
+
+---
+
 ## Install
 
 One global install; your agents set up every project for you after that.
