@@ -1,248 +1,296 @@
 /**
- * Core type definitions for the Stated shared project state.
+ * Cairn — core types.
  *
- * Everything here maps 1:1 onto a file inside `.stated/`. The repository is the
- * source of truth — these types are simply the shape of what lives on disk.
+ * The journal is an append-only stream of immutable events. EVERYTHING else
+ * (state, tasks, decisions, memory, context) is *derived* from these events.
+ * History is truth; state is a cache; snapshots are an optimization.
  */
 
-/** Lifecycle of a task. */
-export type TaskStatus =
-  | "todo"
-  | "claimed"
-  | "active"
-  | "blocked"
-  | "completed";
+/**
+ * Canonical event type identifiers. The protocol is open: any string of the
+ * form `custom.*` (or, in practice, any namespaced string) is also valid, which
+ * is why {@link EventType} is `KnownEventType | (string & {})` — known types get
+ * autocomplete while the stream stays extensible for the next decade.
+ */
+export type KnownEventType =
+  | "agent.registered"
+  | "agent.heartbeat"
+  | "agent.disconnected"
+  | "goal.created"
+  | "goal.updated"
+  | "goal.archived"
+  | "task.created"
+  | "task.started"
+  | "task.blocked"
+  | "task.completed"
+  | "task.archived"
+  | "decision.made"
+  | "decision.superseded"
+  | "decision.reverted"
+  | "decision.archived"
+  | "file.read"
+  | "file.created"
+  | "file.modified"
+  | "file.deleted"
+  | "git.commit"
+  | "artifact.created"
+  | "artifact.updated"
+  | "artifact.deleted"
+  | "knowledge.learned"
+  | "knowledge.invalidated"
+  | "memory.recorded"
+  | "memory.archived"
+  | "context.generated"
+  | "code.indexed"
+  | "message.sent"
+  | "message.received"
+  | "snapshot.created"
+  | "session.started"
+  | "session.ended";
 
-/** Priority of a task. */
+/** An event type: a known type, or any custom/extension string. */
+export type EventType = KnownEventType | (string & {});
+
+/** Arbitrary structured event payload. */
+export type Payload = Record<string, unknown>;
+
+/**
+ * An immutable journal event. Once appended it is never edited or deleted.
+ * `seq` is assigned by the store (monotonic, gap-free per database) and gives a
+ * total order; `id` is a globally-unique, time-sortable identifier used for
+ * idempotency.
+ */
+export interface JournalEvent<P extends Payload = Payload> {
+  /** Monotonic sequence number assigned on append (total order). */
+  seq: number;
+  /** Globally-unique, lexicographically time-sortable id (ULID). */
+  id: string;
+  /** ISO-8601 timestamp. */
+  timestamp: string;
+  /** Who produced the event (agent or human name). */
+  actor: string;
+  /** Session/run scope this event belongs to. */
+  sessionId: string;
+  /** Project scope (matches the manifest's projectId). */
+  projectId: string;
+  /** Event type discriminant. */
+  type: EventType;
+  /** Schema version of the payload for this event type. */
+  version: number;
+  /** Structured event data. */
+  payload: P;
+}
+
+/** The fields a caller provides when appending; the store fills the rest. */
+export interface NewEvent<P extends Payload = Payload> {
+  type: EventType;
+  payload?: P;
+  /** Optional explicit id (enables client-side idempotency). */
+  id?: string;
+  actor?: string;
+  sessionId?: string;
+  /** Optional explicit timestamp (defaults to now). */
+  timestamp?: string;
+  /** Payload schema version (defaults to 1). */
+  version?: number;
+}
+
+/** Filter for {@link EventStore.queryEvents}. */
+export interface EventQuery {
+  /** Only events of these types. */
+  types?: EventType[];
+  /** Only events from this session. */
+  sessionId?: string;
+  /** Only events by this actor. */
+  actor?: string;
+  /** Events with `seq > sinceSeq`. */
+  sinceSeq?: number;
+  /** Events with `seq <= untilSeq`. */
+  untilSeq?: number;
+  /** Events at/after this ISO timestamp. */
+  since?: string;
+  /** Events at/before this ISO timestamp. */
+  until?: string;
+  /** Max rows. */
+  limit?: number;
+  /** Sort order by seq. Default "asc". */
+  order?: "asc" | "desc";
+}
+
+// --- Derived domain types ----------------------------------------------------
+
+export type TaskStatus = "todo" | "active" | "blocked" | "completed" | "archived";
 export type TaskPriority = "low" | "medium" | "high" | "critical";
 
-/** A unit of work tracked in `.stated/tasks.json`. */
+/** A task, derived by folding `task.*` events. */
 export interface Task {
   id: string;
   title: string;
   description: string;
   status: TaskStatus;
-  /** Agent or human name that owns the task, or empty string if unowned. */
   owner: string;
   priority: TaskPriority;
-  /** ISO-8601 timestamp. */
+  dependencies: string[];
+  blockers: string[];
+  createdBy: string;
+  completedBy: string | null;
   createdAt: string;
-  /** ISO-8601 timestamp. */
   updatedAt: string;
-  /**
-   * ISO-8601 timestamp of the last time this task was confirmed still true —
-   * set on creation, refreshed on every mutation and on explicit `verify`.
-   * Optional for backward compatibility; readers fall back to `updatedAt`.
-   */
-  lastVerifiedAt?: string;
-  /**
-   * Optional session/run scope this task belongs to. Lets one project carry
-   * parallel work streams (e.g. a run per agent session) that can be filtered
-   * independently. Unset means project-wide.
-   */
-  runId?: string;
 }
 
-/** Container shape of `.stated/tasks.json`. */
-export interface TasksFile {
-  tasks: Task[];
-}
+export type DecisionStatus = "active" | "superseded" | "reverted" | "archived";
 
-/** Kind of agent collaborating on the project. */
-export type AgentType =
-  | "claude"
-  | "codex"
-  | "cursor"
-  | "openhands"
-  | "human"
-  | "other";
-
-/** Liveness of an agent. */
-export type AgentStatus = "active" | "idle" | "offline";
-
-/** An agent registered in `.stated/agents.json`. */
-export interface Agent {
-  name: string;
-  type: AgentType;
-  status: AgentStatus;
-  /** ISO-8601 timestamp of the last interaction. */
-  lastSeen: string;
-}
-
-/** A file-ownership record in `.stated/files.json`. */
-export interface FileOwnership {
-  path: string;
-  owner: string;
-  locked: boolean;
-  /** ISO-8601 timestamp of when the claim was made. */
-  claimedAt: string;
-  /**
-   * ISO-8601 timestamp of the last time this claim was confirmed — refreshed on
-   * (re)claim and explicit `verify`. Optional; readers fall back to `claimedAt`.
-   */
-  lastVerifiedAt?: string;
-}
-
-/**
- * Derived freshness of a decaying fact, computed from how long ago it was last
- * verified. Never stored on disk — always a function of the current time.
- */
-export type Confidence = "fresh" | "aging" | "stale";
-
-/** A decaying fact with its derived confidence + age, used in rendered state. */
-export type TaskView = Task & { confidence: Confidence; ageMs: number };
-export type FileView = FileOwnership & {
-  confidence: Confidence;
-  ageMs: number;
-};
-
-/** Aggregate freshness of the whole project, shown as a handoff banner. */
-export interface Freshness {
-  overall: Confidence;
-  counts: { fresh: number; aging: number; stale: number };
-  /** ISO-8601 timestamp of the most recent verification across decaying facts. */
-  lastActivityAt: string | null;
-}
-
-/** A project decision. Canonical source is the `decision_added` event stream. */
+/** A decision, derived by folding `decision.*` events. */
 export interface Decision {
   id: string;
-  /** Whether this decision is current or kept only as history. */
-  status: "active" | "superseded";
-  /** Decision id that replaced this one, when superseded. */
-  supersededBy?: string;
-  /** Calendar date (YYYY-MM-DD) the decision was made. */
-  date: string;
-  decision: string;
-  reason: string;
+  title: string;
+  rationale: string;
+  status: DecisionStatus;
   madeBy: string;
-  /** ISO-8601 timestamp the decision was recorded. */
+  /** The decision id that superseded this one, if any. */
+  supersededBy: string | null;
+  /** The decision id this one supersedes, if any. */
+  supersedes: string | null;
   createdAt: string;
-  /** Optional session/run scope this decision belongs to. Unset = project-wide. */
-  runId?: string;
+  updatedAt: string;
 }
 
-/** Goals parsed from `.stated/goals.md`. */
-export interface Goals {
-  active: string[];
-  completed: string[];
-}
+export type GoalStatus = "active" | "archived";
 
-/** Project metadata parsed from `.stated/project.md`. */
-export interface ProjectInfo {
-  name: string;
+/** A goal, derived by folding `goal.*` events. */
+export interface Goal {
+  id: string;
+  title: string;
   description: string;
-  architecture: string;
-  currentStatus: string;
+  status: GoalStatus;
+  createdAt: string;
+  updatedAt: string;
 }
 
-/** Web/app framework Stated detected in the repo. */
-export type Framework =
-  | "Next.js"
-  | "React"
-  | "Vue"
-  | "Angular"
-  | "Express"
-  | "Fastify"
-  | "Laravel"
-  | "Django"
-  | "Flask";
+export type AgentLiveness = "active" | "idle" | "offline";
+
+/** A registered agent, derived by folding `agent.*` events. */
+export interface AgentRecord {
+  name: string;
+  type: string;
+  version: string;
+  capabilities: string[];
+  currentSession: string;
+  lastSeen: string;
+  /** Computed at read time from `lastSeen`. */
+  liveness: AgentLiveness;
+}
+
+/** File ownership, derived from `file.*` events (last writer owns). */
+export interface Ownership {
+  path: string;
+  owner: string;
+  lastSeq: number;
+  updatedAt: string;
+}
+
+/** A piece of learned knowledge, derived from `knowledge.*` events. */
+export interface Knowledge {
+  id: string;
+  statement: string;
+  source: string;
+  valid: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
 
 /**
- * Machine-optimized compact project state, written to `.stated/state.json`.
- * Designed to be loaded by an agent in a single read for fast context priming.
+ * The full derived state of a project — a pure fold over the event stream.
+ * Never edited by hand; always reconstructable from events.
  */
-export interface State {
-  /** Schema version of the state file. */
-  version: number;
-  /** Primary active goal (first active goal), or empty string. */
-  goal: string;
-  project: ProjectInfo;
-  goals: Goals;
-  /** Active tasks, each annotated with derived confidence + age. */
-  activeTasks: TaskView[];
-  recentDecisions: Decision[];
-  activeAgents: Agent[];
-  /** Locked files, each annotated with derived confidence + age. */
-  lockedFiles: FileView[];
-  frameworks: Framework[];
-  /** Aggregate freshness of the project's decaying facts. */
-  freshness: Freshness;
-  /** ISO-8601 timestamp of the last snapshot regeneration. */
+export interface DerivedState {
+  projectId: string;
+  /** Sequence number of the last event folded into this state. */
+  lastSeq: number;
+  goals: Goal[];
+  tasks: Task[];
+  decisions: Decision[];
+  agents: AgentRecord[];
+  ownership: Ownership[];
+  knowledge: Knowledge[];
   generatedAt: string;
 }
 
-/** The discriminant for an append-only event in `.stated/events.jsonl`. */
-export type EventType =
-  | "initialized"
-  | "agent_registered"
-  | "agent_seen"
-  | "goal_added"
-  | "goal_completed"
-  | "task_created"
-  | "task_claimed"
-  | "task_completed"
-  | "task_updated"
-  | "decision_added"
-  | "decision_superseded"
-  | "file_claimed"
-  | "file_released"
-  | "memory_verified"
-  | "memory_decayed"
-  | "sync_ran"
-  | "handoff_generated"
-  | "snapshot_created";
+// --- Relevance / code-understanding types ------------------------------------
 
-/** Kind of document the keyword search ranks over. */
-export type SearchType = "task" | "decision" | "goal";
-
-/** A searchable unit built from a `.stated/` file (task, decision or goal). */
-export interface SearchDoc {
-  type: SearchType;
-  /** Stable identifier (task/decision id, or a synthetic `goal-*` id). */
-  id: string;
-  /** Short label for display. */
-  title: string;
-  /** Full text the BM25 ranker scores against. */
-  text: string;
-  /** Type-specific display metadata (status, date, owner, …). */
-  meta?: Record<string, unknown>;
+/**
+ * One commit folded into a (intent → files) document — the unit the file-ranker
+ * mines. `intent` is the commit message (+ any task title tagged with the
+ * commit); `tokens` is its tokenized form, cached so ranking never re-tokenizes.
+ */
+export interface CorpusDoc {
+  commit: string;
+  intent: string;
+  tokens: string[];
+  files: Array<{ path: string; owner: string; lastTouched: string }>;
+  timestamp: string;
 }
 
-/** A single ranked search result. */
-export interface SearchHit {
-  type: SearchType;
-  id: string;
-  title: string;
-  /** BM25 relevance score, higher is better. */
+/**
+ * One file's static index, projected from the latest `code.indexed` event:
+ * its language, the internal files it imports, and the symbols it exports. This
+ * is the STATIC half of code understanding — it works on a brand-new repo with
+ * zero git history, where co-occurrence has nothing to say.
+ */
+export interface CodeNode {
+  path: string;
+  lang: string;
+  /** Internal repo paths this file imports (resolved; external deps dropped). */
+  imports: string[];
+  /** Exported symbol names (function/class/const/type/default). */
+  exports: string[];
+}
+
+/** The derived code graph: nodes + reverse (imported-by) edges. */
+export interface CodeGraph {
+  nodes: Map<string, CodeNode>;
+  /** path → files that import it (reverse of `imports`). */
+  importedBy: Map<string, string[]>;
+}
+
+/** A file ranked for relevance to a task, with a human-readable reason. */
+export interface FileScore {
+  path: string;
+  /** Blended relevance score (higher = more relevant). */
   score: number;
-  /** A short excerpt around the first query-term match. */
-  snippet: string;
-  meta: Record<string, unknown>;
+  /** The commit message that best explains why this file was surfaced. */
+  why: string;
+  owner: string;
+  lastTouched: string;
 }
 
-/** One proposed correction from git reconciliation. */
-export interface SyncSuggestion {
-  kind: "release_lock" | "review_task";
-  target: string;
-  reason: string;
+/**
+ * Minimum useful context for a SPECIFIC task: the standard compiled context plus
+ * the ranked relevant files and the decisions/knowledge that touch the task.
+ */
+export interface TaskContext {
+  task: string;
+  projectId: string;
+  goal: string;
+  currentTask: { id: string; title: string; status: string; owner: string } | null;
+  activeTasks: Array<{ id: string; title: string; status: string; owner: string; priority: string }>;
+  activeDecisions: Array<{ id: string; title: string; rationale: string }>;
+  recentActivity: Array<{ at: string; actor: string; summary: string }>;
+  activeAgents: string[];
+  recommendedNextActions: string[];
+  relevantFiles: FileScore[];
+  relatedDecisions: Array<{ id: string; title: string; rationale: string }>;
+  relatedKnowledge: Array<{ statement: string; source: string }>;
+  asOfSeq: number;
+  generatedAt: string;
 }
 
-/** Read-only reconciliation between `.stated/` claims and git reality. */
-export interface SyncReport {
-  ok: boolean;
-  branch: string;
-  dirtyFiles: string[];
-  suggestions: SyncSuggestion[];
-}
-
-/** A single append-only event record. */
-export interface StatedEvent {
-  type: EventType;
-  /** ISO-8601 timestamp. */
-  at: string;
-  /** Actor (agent/human name) responsible, if known. */
-  actor?: string;
-  /** Arbitrary structured payload describing the event. */
-  data?: Record<string, unknown>;
+/** Project manifest stored at `.agent/manifest.json`. */
+export interface Manifest {
+  protocol: "cairn";
+  /** Journal/schema format version. */
+  schemaVersion: number;
+  projectId: string;
+  name: string;
+  createdAt: string;
 }

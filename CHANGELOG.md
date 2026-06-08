@@ -6,9 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Renamed the project to Cairn** — an append-only journal for AI agents;
+  Git-like memory, without the complexity. Supersedes the earlier `stated` and
+  `agent-journal-protocol` (`ajp`) names. The npm package is now `cairn` with
+  the `cairn` and `cairn-mcp` binaries; managed agent-rule blocks use
+  `CAIRN:BEGIN`/`CAIRN:END` markers and `CAIRN_*` env vars (`CAIRN_ROOT`,
+  `CAIRN_ACTOR`, …). The journal directory stays `.agent/` (tool-agnostic, like
+  `.git`), so existing journals migrate untouched.
+
 ### Added
 
-- **Sub-second recall (BM25 search).** `stated search <query>` ranks tasks,
+- **Sub-second recall (BM25 search).** `cairn search <query>` ranks tasks,
   decisions and goals with pure Okapi BM25 — no embeddings, no network, no
   models. Deterministic ordering, `--type`/`--run`/`--limit` filters, and a
   ~140-char snippet per hit. Stays under ~60 ms even at 5k facts / 2 MB, so an
@@ -17,19 +27,19 @@ All notable changes to this project are documented here. The format follows
   (`tokenize`/`buildCorpus`/`bm25Search`/`searchProject`); tested in
   `scope.test.ts`.
 - **Staleness signal.** Active tasks and file locks now carry `lastVerifiedAt`;
-  Stated derives a `confidence` (`fresh`/`aging`/`stale`) at read time and shows
+  Cairn derives a `confidence` (`fresh`/`aging`/`stale`) at read time and shows
   it everywhere — `state.json` (`confidence` per fact + a `freshness` summary),
-  a handoff banner with inline ages, colorized `stated status`, and `stated
+  a handoff banner with inline ages, colorized `cairn status`, and `cairn
   doctor` flagging every stale fact (the rot detector). A fact now decays
   visibly instead of lying.
-- **`stated verify <id|path>`** + `verify_fact` MCP tool + SDK `verifyTask` /
+- **`cairn verify <id|path>`** + `verify_fact` MCP tool + SDK `verifyTask` /
   `verifyFile` / `verify` — re-confirm a fact is still true without editing it,
   resetting its staleness clock.
-- **Customizable memory decay (opt-in).** `.stated/config.json` configures
+- **Customizable memory decay (opt-in).** `.agent/config.json` configures
   `staleness` thresholds and a `decay` policy (auto-release abandoned locks,
   archive long-completed tasks, trim the event log). All policies default to `0`
-  (off). `stated decay` runs a dry run; `--apply` performs the cleanup, archiving
-  to `.stated/snapshots/`. Exposed as the `run_decay` MCP tool and SDK `decay()`.
+  (off). `cairn decay` runs a dry run; `--apply` performs the cleanup, archiving
+  to `.agent/snapshots/`. Exposed as the `run_decay` MCP tool and SDK `decay()`.
 - New event types `memory_verified`, `memory_decayed`.
 - `config.ts` (`loadConfig`/`writeConfig`/`DEFAULT_CONFIG`), `staleness.ts`
   (`confidenceFor`/`viewTask`/`viewFile`/`summarize`/`ageLabel`), `decay.ts`
@@ -38,13 +48,13 @@ All notable changes to this project are documented here. The format follows
 ### Notes
 
 - `Task.lastVerifiedAt` / `FileOwnership.lastVerifiedAt` are optional; legacy
-  `.stated/` data falls back to `updatedAt` / `claimedAt`. No migration needed.
+  `.agent/` data falls back to `updatedAt` / `claimedAt`. No migration needed.
 
 ## [0.1.0] - 2026-06-08
 
 ### Added
 
-- `.stated/` shared project state format: `project.md`, `goals.md`,
+- `.agent/` shared project state format: `project.md`, `goals.md`,
   `tasks.json`, `decisions.md`, `agents.json`, `files.json`, `handoff.md`,
   `state.json`, `events.jsonl`, and `snapshots/`.
 - Crash-safe, Git-friendly file IO (atomic temp-file + `fsync` + rename).
@@ -56,7 +66,7 @@ All notable changes to this project are documented here. The format follows
   Express, Fastify, Laravel, Django, Flask.
 - CLI: `init`, `status`, `state`, `handoff`, `goal`, `task`, `decision`,
   `agent`, `file`, `snapshot`, `doctor`, `mcp`.
-- Async `Stated` SDK with agent attribution and heartbeats.
+- Async `Cairn` SDK with agent attribution and heartbeats.
 - MCP server (stdio) exposing 13 tools and 4 read-only resources, compatible with
   Claude Code, Codex, Cursor, OpenHands and any MCP client.
 - Full vitest suite covering core, SDK, CLI and MCP.

@@ -1,79 +1,39 @@
-import {
-  init,
-  buildState,
-  generateHandoff,
-  createSnapshot,
-  doctor,
-  readProject,
-  readGoals,
-  addGoal,
-  completeGoal,
-  readTasks,
-  addTask,
-  claimTask,
-  startTask,
-  completeTask,
-  blockTask,
-  readDecisions,
-  addDecision,
-  readAgents,
-  registerAgent,
-  liveStatus,
-  readFiles,
-  claimFile,
-  releaseFile,
-  verifyTask,
-  verifyFile,
-  getTask,
-  fileOwner,
-  applyDecay,
-  syncProject,
-  ageLabel,
-  type Confidence,
-  searchProject,
-  type SearchType,
-  requireProjectRoot,
-  findProjectRoot,
-  type TaskPriority,
-} from "../core/index.js";
+import { AgentJournal } from "../sdk/index.js";
+import { init as coreInit, readManifest } from "../core/manifest.js";
+import { findRoot, requireRoot, agentPaths } from "../core/paths.js";
+import { EventStore } from "../core/store.js";
+import { migrate, currentVersion, SCHEMA_VERSION } from "../core/schema.js";
+import { health, validateIntegrity, repair } from "../engines/observability.js";
+import { deriveState, activeTasks, activeDecisions, activeGoals } from "../engines/state.js";
+import { compileContext, type ContextLevel } from "../engines/context.js";
+import { rankFiles, compileTaskContext } from "../engines/relevance.js";
+import { indexRepo } from "../engines/codegraph.js";
+import { watchCode } from "../engines/codewatch.js";
+import { deriveTimeline } from "../engines/memory.js";
+import { renderTimeline } from "../engines/timeline.js";
+import { detectGit } from "../engines/git.js";
+import { pruneAgents } from "../engines/agents.js";
+import { compactJournal } from "../engines/compaction.js";
+import { syncGit, gitDrift } from "../engines/gitsync.js";
+import { writeContextFile, renderRecall } from "../engines/recall.js";
+import { setupProject } from "../setup/install.js";
+import { installGlobal, uninstallGlobal } from "../setup/global.js";
+import { renderProjectSetup, renderGlobalSetup } from "./screens.js";
 
-/** Resolve the active session/run scope from flag or env. */
-function runScope(flags: Parsed["flags"]): string | undefined {
-  return flagStr(flags, "run") ?? process.env["STATED_RUN"] ?? undefined;
-}
+const VERSION = "0.1.2";
 
-const VERSION = "0.1.0";
-
-// --- Tiny ANSI styling (no dependencies) -------------------------------------
-
+// --- styling -----------------------------------------------------------------
 const useColor = process.stdout.isTTY && process.env["NO_COLOR"] === undefined;
-const wrap = (code: string) => (s: string) =>
-  useColor ? `[${code}m${s}[0m` : s;
+const w = (code: string) => (s: string) => (useColor ? `[${code}m${s}[0m` : s);
 const c = {
-  bold: wrap("1"),
-  dim: wrap("2"),
-  red: wrap("31"),
-  green: wrap("32"),
-  yellow: wrap("33"),
-  blue: wrap("34"),
-  cyan: wrap("36"),
-  gray: wrap("90"),
+  bold: w("1"), dim: w("2"), red: w("31"), green: w("32"),
+  yellow: w("33"), cyan: w("36"), gray: w("90"),
 };
+const out = (s = ""): void => { process.stdout.write(s + "\n"); };
+const err = (s = ""): void => { process.stderr.write(s + "\n"); };
 
-function out(s = ""): void {
-  process.stdout.write(s + "\n");
-}
-function err(s = ""): void {
-  process.stderr.write(s + "\n");
-}
-
-// --- Argument parsing ---------------------------------------------------------
-
-interface Parsed {
-  positionals: string[];
-  flags: Record<string, string | boolean>;
-}
-
+// --- arg parsing -------------------------------------------------------------
+interface Parsed { positionals: string[]; flags: Record<string, string | boolean>; }
 function parse(argv: string[]): Parsed {
   const positionals: string[] = [];
   const flags: Record<string, string | boolean> = {};
@@ -82,587 +42,391 @@ function parse(argv: string[]): Parsed {
     if (a.startsWith("--")) {
       const key = a.slice(2);
       const eq = key.indexOf("=");
-      if (eq !== -1) {
-        flags[key.slice(0, eq)] = key.slice(eq + 1);
-      } else {
+      if (eq !== -1) flags[key.slice(0, eq)] = key.slice(eq + 1);
+      else {
         const next = argv[i + 1];
-        if (next !== undefined && !next.startsWith("--")) {
-          flags[key] = next;
-          i++;
-        } else {
-          flags[key] = true;
-        }
+        if (next !== undefined && !next.startsWith("--")) { flags[key] = next; i++; }
+        else flags[key] = true;
       }
-    } else {
-      positionals.push(a);
-    }
+    } else positionals.push(a);
   }
   return { positionals, flags };
 }
+const fstr = (f: Parsed["flags"], k: string) => (typeof f[k] === "string" ? (f[k] as string) : undefined);
+const actorOf = (f: Parsed["flags"]) => fstr(f, "actor") ?? process.env["CAIRN_ACTOR"] ?? "cli";
 
-function flagStr(flags: Parsed["flags"], key: string): string | undefined {
-  const v = flags[key];
-  return typeof v === "string" ? v : undefined;
+function openStore(): EventStore {
+  return new EventStore(agentPaths(requireRoot()).db);
 }
 
-/** Resolve the acting agent from flag, env, or undefined. */
-function actor(flags: Parsed["flags"]): string | undefined {
-  return flagStr(flags, "agent") ?? process.env["STATED_AGENT"] ?? undefined;
-}
-
-function root(): string {
-  return requireProjectRoot();
-}
-
-// --- Help ---------------------------------------------------------------------
-
-const HELP = `${c.bold("stated")} — shared state layer for AI coding agents
+const HELP = `${c.bold("cairn")} — Cairn · the Git of AI memory
 
 ${c.bold("USAGE")}
-  stated <command> [args] [--flags]
+  cairn <command> [args] [--flags]
 
 ${c.bold("COMMANDS")}
-  init                         Create .stated/ in the current directory
-  status                       Show the current shared project state
-  state                        Print machine-readable state.json
-  handoff                      Generate & print handoff.md
-  search <query>               Keyword-search tasks, decisions & goals (BM25; --run)
+  init                       Create a .agent/ journal + teach coding agents
+  setup                      Re-teach coding agents (writes Cairn rules to their files)
+  install-global             Wire global agent rules so agents self-setup every repo
+  uninstall-global           Remove the global bootstrap rules
+  status                     Show derived project state
+  append --type T            Append an event (--payload '<json>' --actor N)
+  state                      Print full derived state (JSON)
+  timeline                   Human-readable timeline (--since <seq> --type T)
+  recall                     Instant "where were we" (also written to .agent/CONTEXT.md)
+  context [--level L]        Compile minimum-token context (small|medium|large|full)
+  context --task "<desc>"    Task-scoped context: + relevant files & related decisions
+  relevant "<task>"          Rank the files a task most likely touches (--k N --json)
+  index                      Build the static code graph (imports + exports) for cold-start
+  watch                      Live-reindex the code graph on every save (--debounce ms)
+  sync                       Capture commits as events + extract decisions (--full, --no-extract)
+  snapshot                   Force a state snapshot
+  compact                    Cold-archive old events + reclaim space (--keep-recent N)
+  prune                      Disconnect stale agents (--idle-ms N)
+  export                     Export the full journal (hot + archive) as JSON
+  doctor                     Health + integrity report
+  migrate                    Apply pending schema migrations
+  repair                     Rebuild indexes + vacuum (history untouched)
+  mcp                        Start the MCP server (stdio)
 
-  goal add <text>              Add an active goal
-  goal complete <query>        Mark a matching active goal completed
-  goal list                    List goals
-
-  task add <title>             Create a task
-  task list                    List tasks
-  task claim <id>              Claim a task (--agent <name>)
-  task start <id>              Mark a task active
-  task complete <id>           Mark a task completed
-  task block <id>              Mark a task blocked (--reason <text>)
-
-  decision add <text>          Record a decision (--reason, --by)
-
-  agent register <name>        Register/heartbeat an agent
-  agent list                   List agents
-
-  file claim <path>            Claim/lock a file (--agent <name>)
-  file release <path>          Release a file
-  file list                    List file ownership
-
-  verify <id|path>             Re-confirm a task/lock is still true (resets decay)
-  sync                         Reconcile Stated claims with git (proposes only)
-  decay [--apply]              Run memory-decay policy (dry run unless --apply)
-
-  snapshot                     Write a restore point to .stated/snapshots/
-  doctor                       Validate .stated/ integrity
-  mcp                          Start the MCP server (stdio) for AI clients
-
-${c.bold("GLOBAL FLAGS")}
-  --agent <name>   Attribute the action to an agent (or set STATED_AGENT)
-  --run <id>       Scope tasks/decisions to a session/run (or set STATED_RUN)
-  --json           Emit JSON instead of formatted text
-  --force          Override locks / reinitialize
-  --version, -v    Print version
-  --help, -h       Print this help
+${c.bold("FLAGS")}
+  --actor <name>   Attribute appended events (or CAIRN_ACTOR)
+  --json           Machine-readable output
+  --version, -h    Version / help
 
 ${c.bold("EXAMPLE")}
-  stated init
-  stated agent register "Claude Code"
-  stated task add "Build OAuth" --priority high
-  stated handoff
+  cairn init
+  cairn append --type decision.made --payload '{"title":"Use SQLite","rationale":"WAL concurrency"}' --actor "Claude Code"
+  cairn context --level small
 `;
 
-// --- Rendering helpers --------------------------------------------------------
-
-const STATUS_COLOR: Record<string, (s: string) => string> = {
-  todo: c.gray,
-  claimed: c.yellow,
-  active: c.cyan,
-  blocked: c.red,
-  completed: c.green,
-};
-
-/** Colorize text by confidence: stale=red, aging=yellow, fresh=unchanged. */
-function confColor(conf: Confidence): (s: string) => string {
-  if (conf === "stale") return c.red;
-  if (conf === "aging") return c.yellow;
-  return (s: string) => s;
-}
-
-/** A short " ⚠ stale (3 weeks)" suffix, dimmed; empty when fresh. */
-function ageSuffix(conf: Confidence, ageMs: number): string {
-  if (conf === "fresh") return "";
-  const label = conf === "stale" ? "⚠ stale" : "aging";
-  return ` ${confColor(conf)(label)} ${c.dim(`(${ageLabel(ageMs)})`)}`;
-}
-
-function renderStatus(flags: Parsed["flags"]): void {
-  const r = root();
-  const state = buildState(r);
-  if (flags["json"]) {
-    out(JSON.stringify(state, null, 2));
-    return;
-  }
-  out(c.bold(`\n  ${state.project.name || "(unnamed project)"}`));
-  if (state.project.description) out(c.dim(`  ${state.project.description}`));
-  out("");
-  out(`  ${c.bold("Goal")}        ${state.goal || c.dim("(none)")}`);
-  out(
-    `  ${c.bold("Frameworks")}  ${
-      state.frameworks.length
-        ? state.frameworks.join(", ")
-        : c.dim("(none detected)")
-    }`,
-  );
-  // Freshness banner.
-  const fr = state.freshness;
-  const frText =
-    fr.counts.stale === 0 && fr.counts.aging === 0
-      ? c.green("✓ all fresh")
-      : `${fr.counts.stale ? c.red(`⚠ ${fr.counts.stale} stale`) : ""}${
-          fr.counts.stale && fr.counts.aging ? ", " : ""
-        }${fr.counts.aging ? c.yellow(`${fr.counts.aging} aging`) : ""}`;
-  out(`  ${c.bold("Freshness")}   ${frText}`);
-  out("");
-  out(c.bold("  Active Tasks"));
-  if (state.activeTasks.length) {
-    for (const t of state.activeTasks) {
-      const color = STATUS_COLOR[t.status] ?? ((s: string) => s);
-      const owner = t.owner ? c.dim(` @${t.owner}`) : "";
-      out(
-        `    ${color(`[${t.status}]`.padEnd(11))} ${t.title} ${c.gray(t.id)}${owner}${ageSuffix(t.confidence, t.ageMs)}`,
-      );
-    }
-  } else {
-    out(c.dim("    (none)"));
-  }
-  out("");
-  out(c.bold("  Active Agents"));
-  if (state.activeAgents.length) {
-    for (const a of state.activeAgents) {
-      out(`    ${c.green("●")} ${a.name} ${c.dim(`(${a.type})`)}`);
-    }
-  } else {
-    out(c.dim("    (none)"));
-  }
-  if (state.lockedFiles.length) {
-    out("");
-    out(c.bold("  Locked Files"));
-    for (const f of state.lockedFiles) {
-      out(
-        `    ${c.yellow("🔒")} ${f.path} ${c.dim(`@${f.owner}`)}${ageSuffix(f.confidence, f.ageMs)}`,
-      );
-    }
-  }
-  if (state.recentDecisions.length) {
-    out("");
-    out(c.bold("  Recent Decisions"));
-    for (const d of state.recentDecisions.slice(0, 3)) {
-      out(`    • ${d.decision}${d.reason ? c.dim(` — ${d.reason}`) : ""}`);
-    }
-  }
-  out("");
-}
-
-// --- Command handlers ---------------------------------------------------------
-
 type Handler = (rest: string[], flags: Parsed["flags"]) => void | Promise<void>;
-
-function need(rest: string[], i: number, what: string): string {
-  const v = rest[i];
-  if (v === undefined || v === "") {
-    throw new Error(`Missing argument: ${what}`);
-  }
-  return v;
-}
 
 const commands: Record<string, Handler> = {
   init(_rest, flags) {
     const cwd = process.cwd();
-    if (findProjectRoot(cwd) && !flags["force"]) {
-      out(c.yellow("⚠ .stated/ already exists. Use --force to reinitialize."));
+    if (findRoot(cwd) && !flags["force"]) {
+      out(c.yellow("⚠ .agent/ already initialized. Use --force to reinitialize."));
       return;
     }
-    const res = init(cwd, {
-      ...(flagStr(flags, "name") ? { name: flagStr(flags, "name")! } : {}),
-      ...(flagStr(flags, "description")
-        ? { description: flagStr(flags, "description")! }
-        : {}),
+    const res = coreInit(cwd, {
+      ...(fstr(flags, "name") ? { name: fstr(flags, "name")! } : {}),
       force: Boolean(flags["force"]),
     });
-    out(c.green("✔ Initialized Stated shared state at .stated/"));
-    if (res.frameworks.length) {
-      out(c.dim(`  Detected: ${res.frameworks.join(", ")}`));
+    // Teach the coding agents (unless --no-agents), then show the nice screen.
+    const s = flags["no-agents"]
+      ? { root: res.root, initializedJournal: true, filesCreated: [], filesUpdated: [], gitHook: false, sessionHook: false }
+      : setupProject(cwd, { all: Boolean(flags["all"]) });
+    // Build the static code index now, so cold-start "task → files" works on the
+    // very first message — before any commit history exists. Best-effort.
+    if (!flags["no-index"]) {
+      try {
+        const store = new EventStore(agentPaths(res.root).db);
+        try {
+          const idx = indexRepo(res.root, { actor: actorOf(flags) });
+          if (idx.events.length) store.batchAppend(idx.events);
+        } finally { store.close(); }
+      } catch { /* indexing is best-effort; never block init */ }
     }
-    out(c.dim('  Next: stated agent register "Claude Code"'));
+    out(renderProjectSetup({ ...s, initializedJournal: true }));
   },
 
-  status: (_rest, flags) => renderStatus(flags),
-
-  state(_rest, flags) {
-    void flags;
-    out(JSON.stringify(buildState(root()), null, 2));
+  "install-global"(_rest, flags) {
+    const r = installGlobal({ all: Boolean(flags["all"]) });
+    if (flags["json"]) return out(JSON.stringify(r, null, 2));
+    out(renderGlobalSetup(r));
   },
 
-  handoff(_rest, flags) {
-    const text = generateHandoff(root());
-    if (flags["json"]) out(JSON.stringify({ handoff: text }, null, 2));
-    else out(text);
+  "uninstall-global"(_rest, flags) {
+    const r = uninstallGlobal();
+    if (flags["json"]) return out(JSON.stringify(r, null, 2));
+    out(r.filesUpdated.length
+      ? c.green(`✔ Removed global bootstrap from: ${r.filesUpdated.join(", ")}`)
+      : c.dim("No global bootstrap found."));
   },
 
-  search(rest, flags) {
-    const query = rest.join(" ").trim();
-    if (!query) throw new Error("Missing argument: search query");
-    const limit = Number(flagStr(flags, "limit")) || 10;
-    const hits = searchProject(root(), query, {
-      ...(flagStr(flags, "type")
-        ? { type: flagStr(flags, "type") as SearchType }
-        : {}),
-      ...(runScope(flags) ? { run: runScope(flags)! } : {}),
-      limit,
+  setup(_rest, flags) {
+    const cwd = process.cwd();
+    const r = setupProject(cwd, { all: Boolean(flags["all"]) });
+    if (flags["json"]) return out(JSON.stringify(r, null, 2));
+    out(renderProjectSetup(r));
+  },
+
+  status(_rest, flags) {
+    const store = openStore();
+    try {
+      const state = deriveState(store);
+      if (flags["json"]) return out(JSON.stringify(state, null, 2));
+      const m = readManifest(requireRoot());
+      out(c.bold(`\n  ${m.name} ${c.dim(`(${state.projectId})`)}`));
+      out(c.dim(`  ${store.count()} events · seq ${state.lastSeq}`));
+      out("");
+      const goal = activeGoals(state)[0];
+      out(`  ${c.bold("Goal")}      ${goal ? goal.title : c.dim("(none)")}`);
+      out("");
+      out(c.bold("  Active Tasks"));
+      const tasks = activeTasks(state);
+      if (tasks.length) for (const t of tasks) {
+        out(`    ${c.cyan(`[${t.status}]`.padEnd(10))} ${t.title} ${c.gray(t.id)}${t.owner ? c.dim(` @${t.owner}`) : ""}`);
+      } else out(c.dim("    (none)"));
+      out("");
+      out(c.bold("  Active Decisions"));
+      const decs = activeDecisions(state);
+      if (decs.length) for (const d of decs) out(`    • ${d.title}${d.rationale ? c.dim(` — ${d.rationale}`) : ""}`);
+      else out(c.dim("    (none)"));
+      out("");
+      out(c.bold("  Agents"));
+      const live = state.agents.filter((a) => a.liveness === "active");
+      if (live.length) for (const a of live) out(`    ${c.green("●")} ${a.name} ${c.dim(`(${a.type})`)}`);
+      else out(c.dim("    (none active)"));
+      out("");
+    } finally {
+      store.close();
+    }
+  },
+
+  append(_rest, flags) {
+    const type = fstr(flags, "type");
+    if (!type) throw new Error("append requires --type <event.type>");
+    let payload: Record<string, unknown> = {};
+    const raw = fstr(flags, "payload");
+    if (raw) {
+      try { payload = JSON.parse(raw); }
+      catch { throw new Error("--payload must be valid JSON"); }
+    }
+    const journal = new AgentJournal({ actor: actorOf(flags) });
+    try {
+      const ev = journal.appendEvent({ type, payload });
+      if (flags["json"]) out(JSON.stringify(ev, null, 2));
+      else out(c.green(`✔ ${ev.type} ${c.gray(`#${ev.seq} ${ev.id}`)}`));
+    } finally {
+      journal.close();
+    }
+  },
+
+  state(_rest, _flags) {
+    const store = openStore();
+    try { out(JSON.stringify(deriveState(store), null, 2)); }
+    finally { store.close(); }
+  },
+
+  timeline(_rest, flags) {
+    const store = openStore();
+    try {
+      const days = deriveTimeline(store, {
+        ...(fstr(flags, "since") ? { sinceSeq: Number(fstr(flags, "since")) } : {}),
+        ...(fstr(flags, "type") ? { types: [fstr(flags, "type")!] } : {}),
+      });
+      if (flags["json"]) return out(JSON.stringify(days, null, 2));
+      out(renderTimeline(days));
+    } finally { store.close(); }
+  },
+
+  context(rest, flags) {
+    const store = openStore();
+    try {
+      const level = (fstr(flags, "level") as ContextLevel) ?? "medium";
+      const task = (fstr(flags, "task") ?? rest.join(" ").trim()) || undefined;
+      const ctx = task
+        ? compileTaskContext(store, task, { level, ...(fstr(flags, "k") ? { k: Number(fstr(flags, "k")) } : {}) })
+        : compileContext(store, { level });
+      out(JSON.stringify(ctx, null, 2));
+    } finally { store.close(); }
+  },
+
+  index(_rest, flags) {
+    const r = requireRoot();
+    const store = openStore();
+    try {
+      const res = indexRepo(r, { actor: actorOf(flags) });
+      const before = store.count();
+      if (res.events.length) store.batchAppend(res.events);
+      const added = store.count() - before;
+      if (flags["json"]) return out(JSON.stringify({ ...res, events: res.events.length, added }, null, 2));
+      out(c.green(`✔ Indexed ${res.files} files · ${res.edges} import edges · ${res.symbols} symbols`));
+      out(c.dim(added ? `  ${added} new/changed file(s) recorded` : "  index already up to date"));
+    } finally { store.close(); }
+  },
+
+  async watch(_rest, flags) {
+    const r = requireRoot();
+    const store = openStore();
+    const debounce = fstr(flags, "debounce") ? Number(fstr(flags, "debounce")) : undefined;
+    const handle = watchCode(store, r, {
+      actor: actorOf(flags),
+      ...(debounce ? { debounceMs: debounce } : {}),
+      onIndex: (path, recorded) =>
+        out(recorded ? c.green(`↻ ${path}`) : c.dim(`· ${path} (no change)`)),
+      onSkip: (path) => out(c.yellow(`⏳ ${path} (mid-edit, skipped)`)),
     });
-    if (flags["json"]) return out(JSON.stringify(hits, null, 2));
-    if (!hits.length) return out(c.dim(`(no matches for "${query}")`));
-    const TYPE_COLOR: Record<string, (s: string) => string> = {
-      task: c.cyan,
-      decision: c.yellow,
-      goal: c.green,
-    };
-    for (const h of hits) {
-      const tag = (TYPE_COLOR[h.type] ?? ((s: string) => s))(
-        `[${h.type}]`.padEnd(11),
-      );
-      out(`${tag} ${h.title} ${c.gray(h.id)} ${c.dim(`(${h.score})`)}`);
-      out(`            ${c.dim(h.snippet)}`);
-    }
+    out(c.bold("cairn watch") + c.dim(` — live code-graph indexing (debounce ${debounce ?? 2500}ms). Ctrl-C to stop.`));
+    await new Promise<void>((resolve) => {
+      const stop = () => {
+        handle.close();
+        store.close();
+        out(c.dim(`\nstopped · ${handle.stats.recorded} change(s) recorded, ${handle.stats.skipped} skipped`));
+        resolve();
+      };
+      process.on("SIGINT", stop);
+      process.on("SIGTERM", stop);
+    });
   },
 
-  goal(rest, flags) {
-    const sub = rest[0];
-    if (sub === "add") {
-      const text = need(rest, 1, "goal text");
-      const goals = addGoal(
-        root(),
-        rest.slice(1).join(" ") || text,
-        actor(flags),
-      );
-      out(c.green(`✔ Goal added. ${goals.active.length} active.`));
-    } else if (sub === "complete" || sub === "done") {
-      const q = need(rest, 1, "goal query");
-      completeGoal(root(), rest.slice(1).join(" ") || q, actor(flags));
-      out(c.green("✔ Goal completed."));
-    } else if (sub === "list" || sub === undefined) {
-      const g = readGoals(root());
-      if (flags["json"]) return out(JSON.stringify(g, null, 2));
-      out(c.bold("Active"));
-      g.active.forEach((x) => out(`  ${c.cyan("○")} ${x}`));
-      if (!g.active.length) out(c.dim("  (none)"));
-      out(c.bold("Completed"));
-      g.completed.forEach((x) => out(`  ${c.green("✔")} ${x}`));
-      if (!g.completed.length) out(c.dim("  (none)"));
-    } else {
-      throw new Error(`Unknown goal subcommand: ${sub}`);
-    }
-  },
-
-  task(rest, flags) {
-    const sub = rest[0];
-    const r = root();
-    switch (sub) {
-      case "add": {
-        const title = rest.slice(1).join(" ").trim();
-        if (!title) throw new Error("Missing argument: task title");
-        const t = addTask(
-          r,
-          {
-            title,
-            ...(flagStr(flags, "description")
-              ? { description: flagStr(flags, "description")! }
-              : {}),
-            priority: (flagStr(flags, "priority") as TaskPriority) ?? "medium",
-            ...(actor(flags) && flags["claim"] ? { owner: actor(flags)! } : {}),
-            ...(runScope(flags) ? { runId: runScope(flags)! } : {}),
-          },
-          actor(flags),
-        );
-        out(c.green(`✔ Task created: ${t.title} ${c.gray(t.id)}`));
-        break;
-      }
-      case "claim": {
-        const id = need(rest, 1, "task id");
-        const who = actor(flags);
-        if (!who)
-          throw new Error("Provide --agent <name> (or set STATED_AGENT).");
-        const t = claimTask(r, id, who, { force: Boolean(flags["force"]) });
-        out(c.green(`✔ ${who} claimed ${t.title} ${c.gray(t.id)}`));
-        break;
-      }
-      case "start": {
-        const id = need(rest, 1, "task id");
-        const t = startTask(r, id, actor(flags));
-        out(c.green(`✔ Started ${t.title} ${c.gray(t.id)}`));
-        break;
-      }
-      case "complete":
-      case "done": {
-        const id = need(rest, 1, "task id");
-        const t = completeTask(r, id, actor(flags));
-        out(c.green(`✔ Completed ${t.title} ${c.gray(t.id)}`));
-        break;
-      }
-      case "block": {
-        const id = need(rest, 1, "task id");
-        const t = blockTask(r, id, flagStr(flags, "reason"), actor(flags));
-        out(c.yellow(`⊘ Blocked ${t.title} ${c.gray(t.id)}`));
-        break;
-      }
-      case "list":
-      case undefined: {
-        const scope = runScope(flags);
-        const tasks = readTasks(r).filter((t) => !scope || t.runId === scope);
-        if (flags["json"]) return out(JSON.stringify(tasks, null, 2));
-        if (!tasks.length) {
-          return out(
-            c.dim(scope ? `(no tasks in run "${scope}")` : "(no tasks)"),
-          );
-        }
-        for (const t of tasks) {
-          const color = STATUS_COLOR[t.status] ?? ((s: string) => s);
-          const owner = t.owner ? c.dim(` @${t.owner}`) : "";
-          out(
-            `${color(`[${t.status}]`.padEnd(11))} ${c.gray(t.id)} ${t.title}${owner} ${c.dim(`(${t.priority})`)}`,
-          );
-        }
-        break;
-      }
-      default:
-        throw new Error(`Unknown task subcommand: ${sub}`);
-    }
-  },
-
-  decision(rest, flags) {
-    const sub = rest[0];
-    if (sub === "add") {
-      const text = rest.slice(1).join(" ").trim();
-      if (!text) throw new Error("Missing argument: decision text");
-      const d = addDecision(
-        root(),
-        {
-          decision: text,
-          ...(flagStr(flags, "reason")
-            ? { reason: flagStr(flags, "reason")! }
-            : {}),
-          ...(flagStr(flags, "by") ? { madeBy: flagStr(flags, "by")! } : {}),
-          ...(flagStr(flags, "supersedes")
-            ? { supersedes: flagStr(flags, "supersedes")! }
-            : {}),
-          ...(runScope(flags) ? { runId: runScope(flags)! } : {}),
-        },
-        actor(flags),
-      );
-      out(c.green(`✔ Decision recorded ${c.gray(d.id)}`));
-    } else if (sub === "list" || sub === undefined) {
-      const scope = runScope(flags);
-      const ds = readDecisions(root()).filter(
-        (d) => !scope || d.runId === scope,
-      );
-      if (flags["json"]) return out(JSON.stringify(ds, null, 2));
-      if (!ds.length) return out(c.dim("(no decisions)"));
-      for (const d of ds) {
-        const status =
-          d.status === "superseded"
-            ? c.dim(` superseded by ${d.supersededBy}`)
-            : "";
-        out(
-          `${c.gray(d.date)}  ${d.decision}${d.reason ? c.dim(` — ${d.reason}`) : ""} ${c.dim(`(${d.madeBy})`)}${status}`,
-        );
-      }
-    } else {
-      throw new Error(`Unknown decision subcommand: ${sub}`);
-    }
-  },
-
-  agent(rest, flags) {
-    const sub = rest[0];
-    if (sub === "register") {
-      const name = rest.slice(1).join(" ").trim() || actor(flags);
-      if (!name) throw new Error("Missing argument: agent name");
-      const a = registerAgent(root(), name);
-      out(c.green(`✔ Registered ${a.name} ${c.dim(`(${a.type})`)}`));
-    } else if (sub === "list" || sub === undefined) {
-      const agents = readAgents(root());
-      if (flags["json"]) return out(JSON.stringify(agents, null, 2));
-      if (!agents.length) return out(c.dim("(no agents)"));
-      for (const a of agents) {
-        const live = liveStatus(a);
-        const dot =
-          live === "active"
-            ? c.green("●")
-            : live === "idle"
-              ? c.yellow("●")
-              : c.gray("●");
-        out(
-          `${dot} ${a.name} ${c.dim(`(${a.type}) — ${live}, last seen ${a.lastSeen}`)}`,
-        );
-      }
-    } else {
-      throw new Error(`Unknown agent subcommand: ${sub}`);
-    }
-  },
-
-  file(rest, flags) {
-    const sub = rest[0];
-    if (sub === "claim") {
-      const path = need(rest, 1, "file path");
-      const who = actor(flags);
-      if (!who)
-        throw new Error("Provide --agent <name> (or set STATED_AGENT).");
-      const f = claimFile(root(), path, who, {
-        force: Boolean(flags["force"]),
-      });
-      out(c.green(`✔ ${who} claimed ${f.path}`));
-    } else if (sub === "release") {
-      const path = need(rest, 1, "file path");
-      const removed = releaseFile(root(), path, {
-        ...(actor(flags) ? { owner: actor(flags)! } : {}),
-        force: Boolean(flags["force"]),
-      });
-      out(
-        removed
-          ? c.green(`✔ Released ${path}`)
-          : c.yellow(`⚠ No claim on ${path}`),
-      );
-    } else if (sub === "list" || sub === undefined) {
-      const files = readFiles(root());
+  relevant(rest, flags) {
+    const query = (fstr(flags, "task") ?? rest.join(" ")).trim();
+    if (!query) throw new Error('relevant requires a task description, e.g. cairn relevant "add payment retries"');
+    const store = openStore();
+    try {
+      const k = fstr(flags, "k") ? Number(fstr(flags, "k")) : 10;
+      const files = rankFiles(store, query, { k });
       if (flags["json"]) return out(JSON.stringify(files, null, 2));
-      if (!files.length) return out(c.dim("(no file claims)"));
-      for (const f of files) {
-        out(
-          `${f.locked ? c.yellow("🔒") : "  "} ${f.path} ${c.dim(`@${f.owner}`)}`,
-        );
+      if (!files.length) {
+        out(c.dim("No relevant files — empty corpus? Run `cairn sync --full` to backfill git history."));
+        return;
       }
-    } else {
-      throw new Error(`Unknown file subcommand: ${sub}`);
-    }
+      out(c.bold(`\n  Relevant files for ${c.cyan(`"${query}"`)}`));
+      out("");
+      const maxLen = Math.max(...files.map((f) => f.path.length));
+      for (const f of files) {
+        out(`  ${c.green(f.score.toFixed(3))}  ${f.path.padEnd(maxLen)}  ${c.dim(f.why.slice(0, 48))}`);
+      }
+      out("");
+    } finally { store.close(); }
   },
 
-  verify(rest, flags) {
-    const r = root();
-    const idOrPath = need(rest, 0, "task id or file path");
-    if (getTask(r, idOrPath)) {
-      const t = verifyTask(r, idOrPath, actor(flags));
-      out(c.green(`✔ Verified task ${t.title} ${c.gray(t.id)}`));
-    } else if (fileOwner(r, idOrPath)) {
-      const f = verifyFile(r, idOrPath, actor(flags));
-      out(c.green(`✔ Verified lock on ${f.path}`));
-    } else {
-      throw new Error(`No task or file claim matching "${idOrPath}".`);
-    }
-  },
-
-  decay(_rest, flags) {
-    const r = root();
-    const apply = Boolean(flags["apply"]);
-    const report = applyDecay(r, { apply });
-    if (flags["json"]) return out(JSON.stringify(report, null, 2));
-    if (!report.actions.length) {
-      out(c.dim("No decay actions. (Enable policies in .stated/config.json.)"));
-      return;
-    }
-    for (const a of report.actions) {
-      out(
-        `${c.yellow("•")} ${a.kind} ${c.bold(a.target)} ${c.dim(`— ${a.detail}`)}`,
-      );
-    }
-    out("");
-    if (apply) {
-      out(c.green(`✔ Applied ${report.actions.length} decay action(s).`));
-      if (report.archiveDir) out(c.dim(`  Archived to ${report.archiveDir}`));
-    } else {
-      out(
-        c.dim(
-          `Dry run — ${report.actions.length} action(s). Re-run with --apply to perform them.`,
-        ),
-      );
-    }
+  recall(_rest, flags) {
+    const r = requireRoot();
+    const store = openStore();
+    try {
+      const driftCommits = gitDrift(store, r); // commits since the journal last synced
+      const ctx = writeContextFile(store, r, { driftCommits }); // refresh + return
+      out(flags["json"] ? JSON.stringify(ctx, null, 2) : renderRecall(ctx, { driftCommits }));
+    } finally { store.close(); }
   },
 
   sync(_rest, flags) {
-    const report = syncProject(root(), { actor: actor(flags) });
-    if (flags["json"]) return out(JSON.stringify(report, null, 2));
-    out(`${c.bold("Branch:")} ${report.branch}`);
-    if (report.dirtyFiles.length) {
-      out(`${c.bold("Dirty files:")} ${report.dirtyFiles.length}`);
-      for (const f of report.dirtyFiles) out(`  ${f}`);
-    } else {
-      out(`${c.bold("Dirty files:")} none`);
-    }
-    if (!report.suggestions.length) {
-      out(c.green("✔ No sync suggestions."));
-      return;
-    }
-    out(c.yellow("Suggestions:"));
-    for (const s of report.suggestions) {
-      out(`- ${s.kind} ${c.bold(s.target)} ${c.dim(`— ${s.reason}`)}`);
-    }
+    const r = requireRoot();
+    const store = openStore();
+    try {
+      const res = syncGit(store, r, {
+        full: Boolean(flags["full"]),
+        extractIntent: !flags["no-extract"],
+      });
+      // Re-index after capturing commits so the code graph tracks the new code.
+      // Idempotent per content (hashed event id) → only changed files append.
+      if (res.events && !flags["no-index"]) {
+        const idx = indexRepo(r, { actor: actorOf(flags) });
+        if (idx.events.length) store.batchAppend(idx.events);
+      }
+      writeContextFile(store, r); // keep instant-recall file current
+      if (flags["json"]) return out(JSON.stringify(res, null, 2));
+      if (!res.synced) return out(c.yellow("⚠ Not a git repo — nothing to sync."));
+      if (res.events) {
+        out(c.green(`✔ Captured ${res.commits} commit(s) → ${res.events} event(s) from git`));
+        if (res.decisions) out(c.dim(`  extracted ${res.decisions} decision(s) from commit messages`));
+      } else {
+        out(c.dim(res.toCommit && !res.fromCommit
+          ? "Baseline set at HEAD — future commits will be captured automatically."
+          : "Already up to date with git."));
+      }
+    } finally { store.close(); }
   },
 
   snapshot(_rest, _flags) {
-    const dir = createSnapshot(root());
-    out(c.green(`✔ Snapshot written to ${dir}`));
+    const journal = new AgentJournal({ actor: "cairn" });
+    try { out(c.green(`✔ Snapshot at seq ${journal.snapshot()}`)); }
+    finally { journal.close(); }
   },
 
-  async mcp(_rest, _flags) {
-    // Lazy-load the MCP server so the CLI stays fast for non-MCP commands.
-    const { startStdioServer } = await import("../mcp/server.js");
-    await startStdioServer();
-    // Keep the process alive; the transport owns the lifecycle.
-    await new Promise<never>(() => {});
+  compact(_rest, flags) {
+    const store = openStore();
+    try {
+      const keep = fstr(flags, "keep-recent");
+      const jr = compactJournal(store, keep ? { keepRecent: Number(keep) } : {});
+      const pr = store.compact();
+      if (flags["json"]) return out(JSON.stringify({ journal: jr, pages: pr }, null, 2));
+      out(c.green(`✔ Archived ${jr.archived} events (cut seq ${jr.cutSeq}); hot table now ${jr.remaining}`));
+      out(c.dim(`  reclaimed: ${pr.before} → ${pr.after} pages`));
+    } finally { store.close(); }
+  },
+
+  prune(_rest, flags) {
+    const store = openStore();
+    try {
+      const idle = fstr(flags, "idle-ms");
+      const r = pruneAgents(store, {
+        actor: actorOf(flags),
+        ...(idle ? { idleMs: Number(idle) } : {}),
+      });
+      if (flags["json"]) return out(JSON.stringify(r, null, 2));
+      out(r.pruned.length
+        ? c.green(`✔ Pruned ${r.pruned.length} stale agent(s): ${r.pruned.join(", ")}`)
+        : c.dim("No stale agents to prune."));
+    } finally { store.close(); }
+  },
+
+  export(_rest, flags) {
+    const store = openStore();
+    try {
+      const events = store.exportEvents();
+      out(flags["pretty"] ? JSON.stringify(events, null, 2) : JSON.stringify(events));
+    } finally { store.close(); }
   },
 
   doctor(_rest, flags) {
-    const report = doctor(root());
-    if (flags["json"]) return out(JSON.stringify(report, null, 2));
-    for (const f of report.findings) {
-      const icon =
-        f.level === "ok"
-          ? c.green("✔")
-          : f.level === "warn"
-            ? c.yellow("⚠")
-            : c.red("✖");
-      out(`${icon} ${f.message}`);
-    }
-    out("");
-    out(report.healthy ? c.green("Healthy.") : c.red("Problems found."));
-    if (!report.healthy) process.exitCode = 1;
+    const store = openStore();
+    try {
+      const h = health(store);
+      const integ = validateIntegrity(store);
+      if (flags["json"]) return out(JSON.stringify({ health: h, integrity: integ }, null, 2));
+      out(`${h.ok ? c.green("✔") : c.yellow("⚠")} ${h.total} events (${h.events} hot, ${h.archived} archived) · seq ${h.lastSeq} · ${h.snapshots} snapshots (lag ${h.snapshotLag})`);
+      out(`  schema v${h.schemaVersion} (expected v${h.expectedSchemaVersion})`);
+      for (const i of h.issues) out(c.yellow(`  ⚠ ${i}`));
+      out(`${integ.healthy ? c.green("✔") : c.red("✖")} integrity: checked ${integ.checked} events`);
+      for (const p of integ.problems) out(c.red(`  ✖ ${p}`));
+      out("");
+      out(h.ok && integ.healthy ? c.green("Healthy.") : c.red("Problems found."));
+      if (!(h.ok && integ.healthy)) process.exitCode = 1;
+    } finally { store.close(); }
+  },
+
+  migrate(_rest, _flags) {
+    const store = openStore();
+    try {
+      const before = currentVersion(store.db);
+      const after = migrate(store.db);
+      out(after > before
+        ? c.green(`✔ Migrated schema v${before} → v${after}`)
+        : c.dim(`Already at schema v${after} (latest ${SCHEMA_VERSION})`));
+    } finally { store.close(); }
+  },
+
+  repair(_rest, _flags) {
+    const store = openStore();
+    try {
+      for (const a of repair(store).actions) out(c.green(`✔ ${a}`));
+    } finally { store.close(); }
+  },
+
+  async mcp(_rest, _flags) {
+    const { startStdioServer } = await import("../mcp/server.js");
+    await startStdioServer();
+    await new Promise<never>(() => {});
   },
 };
 
-// Aliases.
-commands["init"] = commands["init"]!;
-
-/** Main CLI entry point. Returns a process exit code. */
-export async function run(
-  argv: string[] = process.argv.slice(2),
-): Promise<number> {
+/** CLI entry point. Returns an exit code. */
+export async function run(argv: string[] = process.argv.slice(2)): Promise<number> {
   const { positionals, flags } = parse(argv);
   const cmd = positionals[0];
-
-  if (flags["version"] || flags["v"] || cmd === "version") {
-    out(VERSION);
-    return 0;
-  }
-  if (!cmd || flags["help"] || flags["h"] || cmd === "help") {
-    out(HELP);
-    return 0;
-  }
-
+  if (flags["version"] || flags["v"] || cmd === "version") { out(VERSION); return 0; }
+  if (!cmd || flags["help"] || flags["h"] || cmd === "help") { out(HELP); return 0; }
   const handler = commands[cmd];
   if (!handler) {
     err(c.red(`Unknown command: ${cmd}`));
-    err(c.dim("Run `stated --help` for usage."));
+    err(c.dim("Run `cairn --help` for usage."));
     return 1;
   }
-
   try {
     await handler(positionals.slice(1), flags);
     return typeof process.exitCode === "number" ? process.exitCode : 0;

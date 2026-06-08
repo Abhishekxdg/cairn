@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "# CAIRN:recall-inject\n[ -f \"/Users/abhishek/Desktop/AgentMem/.agent/CONTEXT.md\" ] && cat \"/Users/abhishek/Desktop/AgentMem/.agent/CONTEXT.md\" || true"
+          }
+        ]
+      }
+    ]
+  }
+}

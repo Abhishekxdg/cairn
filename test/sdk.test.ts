@@ -1,95 +1,91 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { tempProject, cleanup } from "./helpers.js";
-import { Stated } from "../src/index.js";
+import { describe, it, expect, afterAll } from "vitest";
+import { join } from "node:path";
+import { AgentJournal } from "../src/sdk/index.js";
+import { init } from "../src/core/manifest.js";
+import { tempDir, cleanupAll } from "./helpers.js";
 
-let dirs: string[] = [];
-afterEach(() => {
-  for (const d of dirs) cleanup(d);
-  dirs = [];
-});
+afterAll(cleanupAll);
 
-async function freshSdk(agent = "Claude Code"): Promise<Stated> {
-  const dir = tempProject();
-  dirs.push(dir);
-  const sdk = new Stated({ cwd: dir, agent });
-  await sdk.init();
-  await sdk.registerAgent();
-  return sdk;
+function journal(actor = "Claude Code"): AgentJournal {
+  const dir = tempDir();
+  return new AgentJournal({ dbPath: join(dir, "j.db"), actor, projectId: "test", autoGit: false });
 }
 
-describe("Stated SDK", () => {
-  it("initializes and reports state", async () => {
-    const sdk = await freshSdk();
-    expect(sdk.isInitialized()).toBe(true);
-    const state = await sdk.getState();
-    expect(state.version).toBe(1);
-    expect(state.activeAgents.some((a) => a.name === "Claude Code")).toBe(true);
+describe("AgentJournal SDK", () => {
+  it("runs a task lifecycle and derives state", () => {
+    const j = journal();
+    j.registerAgent();
+    const goal = j.createGoal({ title: "Launch" });
+    const { id } = j.createTask({ title: "OAuth", priority: "high" });
+    j.startTask(id);
+    j.completeTask(id);
+
+    const st = j.getState();
+    expect(st.goals.find((g) => g.id === goal)?.title).toBe("Launch");
+    expect(st.tasks.find((t) => t.id === id)?.status).toBe("completed");
+    j.close();
   });
 
-  it("runs the full task lifecycle attributing to the configured agent", async () => {
-    const sdk = await freshSdk();
-    await sdk.addGoal("Launch MailMeld");
-    const t = await sdk.addTask({ title: "OAuth", priority: "high" });
-    await sdk.claimTask(t.id);
-    const claimed = await sdk.getTask(t.id);
-    expect(claimed?.owner).toBe("Claude Code");
-
-    await sdk.startTask(t.id);
-    await sdk.completeTask(t.id);
-    expect((await sdk.getTask(t.id))?.status).toBe("completed");
+  it("records decisions with supersession", () => {
+    const j = journal();
+    const a = j.decide({ title: "Use PostgreSQL" });
+    j.decide({ title: "Use CockroachDB", supersedes: a.id });
+    const active = j.getState().decisions.filter((d) => d.status === "active");
+    expect(active).toHaveLength(1);
+    expect(active[0]?.title).toBe("Use CockroachDB");
+    j.close();
   });
 
-  it("accepts a string shorthand for tasks and decisions", async () => {
-    const sdk = await freshSdk();
-    const t = await sdk.addTask("Quick task");
-    expect(t.title).toBe("Quick task");
-    const d = await sdk.addDecision("Use PostgreSQL");
-    expect(d.decision).toBe("Use PostgreSQL");
-    expect(d.madeBy).toBe("Claude Code");
+  it("compiles context and logs a context.generated event", () => {
+    const j = journal();
+    j.createGoal({ title: "Ship" });
+    const before = j.events().length;
+    const ctx = j.getContext("small");
+    expect(ctx.goal).toBe("Ship");
+    expect(j.events().length).toBe(before + 1);
+    expect(j.events({ types: ["context.generated"] })).toHaveLength(1);
+    j.close();
   });
 
-  it("claims and releases files", async () => {
-    const sdk = await freshSdk();
-    await sdk.claimFile("src/payment.ts");
-    const files = await sdk.getFiles();
-    expect(files[0]?.owner).toBe("Claude Code");
-    expect(await sdk.releaseFile("src/payment.ts")).toBe(true);
+  it("derives memory and knowledge", () => {
+    const j = journal();
+    j.recordMemory("User prefers tabs", ["pref"]);
+    j.learn("Rate limit is 100/s");
+    expect(j.getMemory()).toHaveLength(1);
+    expect(j.getKnowledge()).toHaveLength(1);
+    j.close();
   });
 
-  it("generates a handoff containing key sections", async () => {
-    const sdk = await freshSdk();
-    await sdk.addGoal("Ship it");
-    const handoff = await sdk.getHandoff();
-    expect(handoff).toContain("Goal:");
-    expect(handoff).toContain("Ship it");
-    expect(handoff).toContain("Next Recommended Steps");
+  it("idempotent append via explicit id", () => {
+    const j = journal();
+    j.appendEvent({ id: "once", type: "custom.x", payload: { v: 1 } });
+    j.appendEvent({ id: "once", type: "custom.x", payload: { v: 2 } });
+    expect(j.events({ types: ["custom.x"] })).toHaveLength(1);
+    j.close();
   });
 
-  it("two agents coordinate on the same project", async () => {
-    const dir = tempProject();
-    dirs.push(dir);
-    const claude = new Stated({ cwd: dir, agent: "Claude Code" });
-    await claude.init();
-    await claude.registerAgent();
-    const codex = new Stated({ cwd: dir, agent: "Codex" });
-    await codex.registerAgent();
-
-    const t = await claude.addTask("Shared work");
-    await claude.claimTask(t.id);
-
-    // Codex sees Claude owns it and cannot steal without force.
-    await expect(codex.claimTask(t.id)).rejects.toThrow(/already owned/);
-
-    const state = await codex.getState();
-    expect(state.activeAgents.map((a) => a.name).sort()).toEqual([
-      "Claude Code",
-      "Codex",
-    ]);
+  it("two agents share one journal file", () => {
+    const dir = tempDir();
+    const dbPath = join(dir, "shared.db");
+    const claude = new AgentJournal({ dbPath, actor: "Claude Code", projectId: "test", autoGit: false });
+    const codex = new AgentJournal({ dbPath, actor: "Codex", projectId: "test", autoGit: false });
+    claude.registerAgent();
+    const { id } = claude.createTask({ title: "Shared" });
+    codex.completeTask(id);
+    // Codex's view reflects Claude's task.
+    expect(codex.getState().tasks.find((t) => t.id === id)?.status).toBe("completed");
+    expect(codex.getState().tasks.find((t) => t.id === id)?.completedBy).toBe("Codex");
+    claude.close();
+    codex.close();
   });
 
-  it("doctor reports healthy", async () => {
-    const sdk = await freshSdk();
-    const report = await sdk.doctor();
-    expect(report.healthy).toBe(true);
+  it("init creates a real journal on disk", () => {
+    const dir = tempDir();
+    const res = init(dir, { name: "Demo" });
+    expect(res.projectId).toMatch(/^proj_/);
+    const j = new AgentJournal({ cwd: dir, actor: "tester" });
+    expect(j.isInitialized()).toBe(true);
+    expect(j.manifest().name).toBe("Demo");
+    j.close();
   });
 });

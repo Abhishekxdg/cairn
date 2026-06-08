@@ -1,56 +1,61 @@
-# Contributing to Stated
+# Contributing to Cairn
 
-Thanks for helping build the shared state layer for AI coding agents.
+Thanks for helping build the open standard for AI agent memory.
 
-## Getting started
+## Setup
 
 ```bash
-git clone https://github.com/stated-dev/stated.git
-cd stated
+cd cairn
 npm install
 npm run build
 npm test
 ```
 
-## Project layout
+`better-sqlite3` is a native module; `npm install` uses prebuilt binaries where
+available (no toolchain needed on common platforms).
+
+## Layout
 
 ```text
-src/core/   Canonical synchronous file API. One module per .stated file:
-            project.ts, goals.ts, tasks.ts, decisions.ts, agents.ts,
-            files.ts, events.ts, snapshot.ts, init.ts, doctor.ts.
-            All on-disk types live in types.ts; all IO in io.ts (atomic + fsync).
-src/sdk/    The ergonomic async `Stated` class. Thin wrapper over core.
-src/cli/    Dependency-free arg parser + command handlers.
-src/mcp/    MCP server exposing core as tools + resources.
-test/       Vitest suites covering core, sdk, cli and mcp.
+src/core/     event store, schema/migrations, types, ids, paths, manifest
+src/reducers/ pure folds (event → state)
+src/engines/  state, snapshots, context, timeline, memory, observability, git
+src/sdk/      AgentJournal façade
+src/cli/      cairn CLI
+src/mcp/      MCP server
+test/         store, reducers, state, engines, migration, concurrency, perf, sdk, mcp
+docs/         protocol + subsystem docs
 ```
 
-## Principles to preserve
+## Invariants to preserve
 
-- **The repository is the source of truth.** Never introduce a database, cloud
-  service, network call, model, or embedding.
-- **Human- and AI-readable, merge-friendly.** Markdown for humans, pretty JSON
-  for machines, append-only `events.jsonl` for history.
-- **Crash-safe writes.** All writes go through `io.ts` (temp file + fsync +
-  rename). Don't write files directly.
-- **Derived files are derived.** `handoff.md` and `state.json` are regenerated
-  by `snapshot.ts` — never hand-edit them and never make them canonical.
+1. **Events are immutable.** Never add an API that edits or deletes an event.
+   State changes are new events only.
+2. **Reducers are pure.** No I/O, no clock reads, no random ids. Derived-entity
+   ids come from the payload or the event id (determinism — see
+   [PROTOCOL.md](docs/PROTOCOL.md) § 5).
+3. **The journal is the only source of truth.** Anything else is a derivable
+   cache; losing it must cost zero data.
+4. **Concurrency safety is non-negotiable.** No read-modify-write on shared
+   state. New writes go through `EventStore` (single-row append or a transaction).
+5. **Don't break old journals.** Schema changes are additive forward migrations
+   ([MIGRATIONS.md](docs/MIGRATIONS.md)).
 
-## Adding a command / tool
+## Adding an event type
 
-1. Implement the behavior in the relevant `src/core/*.ts` module (it should
-   append an event and call `regenerate`).
-2. Surface it in the SDK (`src/sdk/index.ts`).
-3. Wire it into the CLI (`src/cli/index.ts`) and the MCP server
-   (`src/mcp/server.ts`).
-4. Add tests in `test/`.
+1. Add it to `KnownEventType` in `core/types.ts` and document it in
+   [EVENT_MODEL.md](docs/EVENT_MODEL.md).
+2. Handle it in `reducers/index.ts` (or intentionally leave it
+   history-only).
+3. If it affects timelines, add a case in `engines/timeline.ts`.
+4. Add a reducer test in `test/reducers.test.ts`.
 
-## Before opening a PR
+## Before a PR
 
 ```bash
 npm run typecheck
 npm test
 ```
 
-Keep the public API documented and the README in sync. By contributing you agree
-to license your work under the MIT License.
+Keep the docs in sync with behavior. By contributing you agree to license your
+work under the MIT License.

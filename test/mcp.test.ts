@@ -1,119 +1,82 @@
-import { describe, it, expect, afterEach, beforeEach } from "vitest";
+import { describe, it, expect, afterAll, beforeEach, afterEach } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { tempProject, cleanup } from "./helpers.js";
+import { join } from "node:path";
+import { init } from "../src/core/manifest.js";
 import { createServer } from "../src/mcp/server.js";
-import { init } from "../src/core/index.js";
+import { tempDir, cleanupAll } from "./helpers.js";
 
-let dirs: string[] = [];
-let prevRoot: string | undefined;
+afterAll(cleanupAll);
 
+let prev: string | undefined;
 beforeEach(() => {
-  prevRoot = process.env["STATED_ROOT"];
+  prev = process.env["CAIRN_ROOT"];
 });
 afterEach(() => {
-  if (prevRoot === undefined) delete process.env["STATED_ROOT"];
-  else process.env["STATED_ROOT"] = prevRoot;
-  for (const d of dirs) cleanup(d);
-  dirs = [];
+  if (prev === undefined) delete process.env["CAIRN_ROOT"];
+  else process.env["CAIRN_ROOT"] = prev;
 });
 
-async function connect(): Promise<{ client: Client; root: string }> {
-  const root = tempProject();
-  dirs.push(root);
-  init(root);
-  process.env["STATED_ROOT"] = root;
-
+async function connect() {
+  const dir = tempDir();
+  init(dir, { name: "MCP Test" });
+  process.env["CAIRN_ROOT"] = dir;
   const server = createServer();
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "test", version: "0.0.0" });
-  await Promise.all([
-    server.connect(serverTransport),
-    client.connect(clientTransport),
-  ]);
-  return { client, root };
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "t", version: "0" });
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  return { client };
 }
+const textOf = (r: any) => r.content.map((c: any) => c.text).join("\n");
 
-function textOf(result: any): string {
-  return result.content.map((c: any) => c.text).join("\n");
-}
-
-describe("MCP server", () => {
-  it("exposes the expected tools", async () => {
+describe("Cairn MCP server", () => {
+  it("exposes the protocol tools", async () => {
     const { client } = await connect();
-    const { tools } = await client.listTools();
-    const names = tools.map((t) => t.name);
-    for (const expected of [
+    const names = (await client.listTools()).tools.map((t) => t.name);
+    for (const t of [
+      "append_event",
+      "query_state",
+      "query_memory",
+      "query_timeline",
+      "query_context",
       "register_agent",
-      "get_state",
-      "get_handoff",
-      "create_task",
-      "claim_task",
-      "complete_task",
-      "create_decision",
-      "claim_file",
-      "release_file",
-      "generate_handoff",
+      "create_snapshot",
+      "get_active_tasks",
+      "get_active_decisions",
     ]) {
-      expect(names, expected).toContain(expected);
+      expect(names, t).toContain(t);
     }
   });
 
-  it("drives a full workflow through tool calls", async () => {
+  it("drives a workflow through tool calls", async () => {
     const { client } = await connect();
-
+    await client.callTool({ name: "register_agent", arguments: { name: "Claude Code" } });
     await client.callTool({
-      name: "register_agent",
-      arguments: { name: "Claude Code" },
+      name: "append_event",
+      arguments: { type: "task.created", payload: { id: "t1", title: "Build OAuth", priority: "high" } },
     });
-
-    const created = await client.callTool({
-      name: "create_task",
-      arguments: { title: "Build OAuth", priority: "high" },
-    });
-    const task = JSON.parse(textOf(created));
-    expect(task.id).toMatch(/^t_/);
-
     await client.callTool({
-      name: "claim_task",
-      arguments: { id: task.id, owner: "Claude Code" },
+      name: "append_event",
+      arguments: { type: "decision.made", payload: { id: "d1", title: "Use SQLite", rationale: "WAL" } },
     });
 
-    await client.callTool({
-      name: "create_decision",
-      arguments: { decision: "Use BullMQ", reason: "Reliable retries" },
-    });
+    const tasks = JSON.parse(textOf(await client.callTool({ name: "get_active_tasks", arguments: {} })));
+    expect(tasks[0].title).toBe("Build OAuth");
 
-    const stateRes = await client.callTool({ name: "get_state", arguments: {} });
-    const state = JSON.parse(textOf(stateRes));
-    expect(state.activeTasks[0].title).toBe("Build OAuth");
-    expect(state.recentDecisions[0].decision).toBe("Use BullMQ");
-    expect(state.activeAgents.some((a: any) => a.name === "Claude Code")).toBe(true);
+    const decisions = JSON.parse(textOf(await client.callTool({ name: "get_active_decisions", arguments: {} })));
+    expect(decisions[0].title).toBe("Use SQLite");
 
-    const handoff = await client.callTool({
-      name: "get_handoff",
-      arguments: {},
-    });
-    expect(textOf(handoff)).toContain("Build OAuth");
+    const ctx = JSON.parse(textOf(await client.callTool({ name: "query_context", arguments: { level: "small" } })));
+    expect(ctx.currentTask.id).toBe("t1");
 
-    await client.callTool({
-      name: "complete_task",
-      arguments: { id: task.id },
-    });
-    const after = JSON.parse(
-      textOf(await client.callTool({ name: "get_state", arguments: {} })),
-    );
-    expect(after.activeTasks).toHaveLength(0);
+    await client.callTool({ name: "append_event", arguments: { type: "task.completed", payload: { id: "t1" } } });
+    const after = JSON.parse(textOf(await client.callTool({ name: "get_active_tasks", arguments: {} })));
+    expect(after).toHaveLength(0);
   });
 
-  it("serves read-only resources", async () => {
+  it("serves the state resource", async () => {
     const { client } = await connect();
-    const { resources } = await client.listResources();
-    expect(resources.map((r) => r.uri)).toEqual(
-      expect.arrayContaining(["stated://handoff", "stated://state"]),
-    );
-    const read = await client.readResource({ uri: "stated://state" });
-    expect(read.contents[0]?.text).toContain("\"version\"");
+    const read = await client.readResource({ uri: "cairn://state" });
+    expect(read.contents[0]?.text).toContain("projectId");
   });
 });

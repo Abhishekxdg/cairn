@@ -3,11 +3,7 @@ dist/
 coverage/
 *.log
 .DS_Store
-.env
-.env.*
-npm-debug.log*
-yarn-error.log*
 .vitest/
 
-# Generated A/B wedge fixtures (reproducible via ajp/scripts/wedge-fixture*.mjs)
+# Generated test fixtures (regenerable via scripts/wedge-fixture*.mjs)
 wedge-fixture/

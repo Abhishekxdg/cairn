@@ -1,127 +1,96 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { tempProject, cleanup } from "./helpers.js";
+import { tempDir, cleanupAll } from "./helpers.js";
 import { run } from "../src/cli/index.js";
 
-let dirs: string[] = [];
-let cwd: string;
+afterEach(cleanupAll);
 
+let cwd: string;
 beforeEach(() => {
   cwd = process.cwd();
 });
 afterEach(() => {
   process.chdir(cwd);
-  for (const d of dirs) cleanup(d);
-  dirs = [];
   vi.restoreAllMocks();
   process.exitCode = 0;
 });
 
-/** Run a CLI command in a temp project, capturing stdout/stderr. */
-async function cli(
-  args: string[],
-  project?: string,
-): Promise<{ code: number; stdout: string; stderr: string }> {
+async function cli(args: string[], dir?: string) {
   let stdout = "";
   let stderr = "";
-  vi.spyOn(process.stdout, "write").mockImplementation((chunk: any) => {
-    stdout += String(chunk);
-    return true;
-  });
-  vi.spyOn(process.stderr, "write").mockImplementation((chunk: any) => {
-    stderr += String(chunk);
-    return true;
-  });
-  if (project) process.chdir(project);
+  vi.spyOn(process.stdout, "write").mockImplementation((c: any) => { stdout += String(c); return true; });
+  vi.spyOn(process.stderr, "write").mockImplementation((c: any) => { stderr += String(c); return true; });
+  if (dir) process.chdir(dir);
   const code = await run(args);
   return { code, stdout, stderr };
 }
 
-function newProject(): string {
-  const d = tempProject();
-  dirs.push(d);
-  return d;
-}
-
-describe("CLI", () => {
-  it("prints help with no args", async () => {
-    const { code, stdout } = await cli([]);
-    expect(code).toBe(0);
-    expect(stdout).toContain("shared state layer for AI coding agents");
+describe("cairn CLI", () => {
+  it("help and version", async () => {
+    expect((await cli(["--version"])).stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
+    expect((await cli([])).stdout).toContain("Cairn");
   });
 
-  it("prints version", async () => {
-    const { stdout } = await cli(["--version"]);
-    expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
+  it("init → append → status → state", async () => {
+    const dir = tempDir();
+    expect((await cli(["init"], dir)).stdout).toContain("created shared memory");
+    await cli(["append", "--type", "agent.registered", "--payload", '{"name":"Claude Code"}', "--actor", "Claude Code"], dir);
+    await cli(["append", "--type", "goal.created", "--payload", '{"id":"g1","title":"Launch"}'], dir);
+    await cli(["append", "--type", "task.created", "--payload", '{"id":"t1","title":"OAuth","priority":"high"}'], dir);
+    await cli(["append", "--type", "task.started", "--payload", '{"id":"t1"}', "--actor", "Claude Code"], dir);
+
+    const status = await cli(["status"], dir);
+    expect(status.stdout).toContain("Launch");
+    expect(status.stdout).toContain("OAuth");
+
+    const state = await cli(["state"], dir);
+    expect(JSON.parse(state.stdout).tasks[0].id).toBe("t1");
   });
 
-  it("init then status", async () => {
-    const p = newProject();
-    const initRes = await cli(["init"], p);
-    expect(initRes.code).toBe(0);
-    expect(initRes.stdout).toContain("Initialized");
+  it("context, timeline, snapshot, export", async () => {
+    const dir = tempDir();
+    await cli(["init"], dir);
+    await cli(["append", "--type", "decision.made", "--payload", '{"id":"d1","title":"Use SQLite","rationale":"WAL"}'], dir);
 
-    const status = await cli(["status", "--json"], p);
-    const state = JSON.parse(status.stdout);
-    expect(state.version).toBe(1);
+    const ctx = await cli(["context", "--level", "small"], dir);
+    expect(JSON.parse(ctx.stdout).activeDecisions[0].title).toBe("Use SQLite");
+
+    expect((await cli(["timeline"], dir)).stdout).toContain("Use SQLite");
+    expect((await cli(["snapshot"], dir)).stdout).toContain("Snapshot at seq");
+
+    const exp = await cli(["export"], dir);
+    expect(Array.isArray(JSON.parse(exp.stdout))).toBe(true);
   });
 
-  it("full coordination flow over the CLI", async () => {
-    const p = newProject();
-    await cli(["init"], p);
-    await cli(["agent", "register", "Claude Code"], p);
-    await cli(["goal", "add", "Launch MailMeld"], p);
+  it("doctor, migrate, repair, compact, prune", async () => {
+    const dir = tempDir();
+    await cli(["init"], dir);
+    for (let i = 0; i < 10; i++) {
+      await cli(["append", "--type", "custom.n", "--payload", `{"i":${i}}`], dir);
+    }
+    const doctor = await cli(["doctor", "--json"], dir);
+    expect(JSON.parse(doctor.stdout).health.ok).toBe(true);
 
-    const add = await cli(["task", "add", "Build OAuth", "--priority", "high"], p);
-    const id = add.stdout.match(/t_[0-9a-f]{8}/)?.[0];
-    expect(id).toBeTruthy();
-
-    const claim = await cli(["task", "claim", id!, "--agent", "Claude Code"], p);
-    expect(claim.code).toBe(0);
-    expect(claim.stdout).toContain("claimed");
-
-    await cli(["decision", "add", "Use BullMQ", "--reason", "Reliable retries"], p);
-    await cli(["file", "claim", "src/auth.ts", "--agent", "Claude Code"], p);
-
-    const handoff = await cli(["handoff"], p);
-    expect(handoff.stdout).toContain("Launch MailMeld");
-    expect(handoff.stdout).toContain("Build OAuth");
-    expect(handoff.stdout).toContain("src/auth.ts");
-
-    const complete = await cli(["task", "complete", id!], p);
-    expect(complete.stdout).toContain("Completed");
-
-    const doctor = await cli(["doctor", "--json"], p);
-    expect(JSON.parse(doctor.stdout).healthy).toBe(true);
+    expect((await cli(["migrate"], dir)).stdout).toMatch(/schema/i);
+    expect((await cli(["repair"], dir)).stdout).toContain("vacuumed");
+    expect((await cli(["compact"], dir)).stdout).toContain("Archived");
+    expect((await cli(["prune"], dir)).stdout).toMatch(/prune|No stale/i);
   });
 
-  it("searches tasks, decisions and goals", async () => {
-    const p = newProject();
-    await cli(["init"], p);
-    await cli(["task", "add", "Build OAuth login flow"], p);
-    await cli(["decision", "add", "Use BullMQ for job queues"], p);
+  it("errors without a journal and on unknown command", async () => {
+    const dir = tempDir();
+    const noJournal = await cli(["status"], dir);
+    expect(noJournal.code).toBe(1);
+    expect(noJournal.stderr).toContain("cairn init");
 
-    const json = await cli(["search", "oauth", "--json"], p);
-    const hits = JSON.parse(json.stdout);
-    expect(hits[0].type).toBe("task");
-    expect(hits[0].title).toContain("OAuth");
-
-    const typed = await cli(["search", "bullmq", "--type", "decision"], p);
-    expect(typed.stdout).toContain("[decision]");
-
-    const none = await cli(["search", "kubernetes"], p);
-    expect(none.stdout).toContain("no matches");
+    const unknown = await cli(["frobnicate"]);
+    expect(unknown.code).toBe(1);
+    expect(unknown.stderr).toContain("Unknown command");
   });
 
-  it("errors helpfully when not initialized", async () => {
-    const p = newProject();
-    const { code, stderr } = await cli(["status"], p);
-    expect(code).toBe(1);
-    expect(stderr).toContain("stated init");
-  });
-
-  it("rejects unknown commands", async () => {
-    const { code, stderr } = await cli(["frobnicate"]);
-    expect(code).toBe(1);
-    expect(stderr).toContain("Unknown command");
+  it("append requires --type and valid JSON", async () => {
+    const dir = tempDir();
+    await cli(["init"], dir);
+    expect((await cli(["append"], dir)).code).toBe(1);
+    expect((await cli(["append", "--type", "custom.x", "--payload", "{bad"], dir)).stderr).toContain("valid JSON");
   });
 });

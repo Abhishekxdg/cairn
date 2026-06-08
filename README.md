@@ -1,383 +1,284 @@
-# Stated
+# Cairn (Cairn)
 
-**Shared state layer for AI coding agents.** _Git for AI work._
-
-Let Claude Code, Codex, Cursor and OpenHands collaborate without losing context.
+**The Git of AI memory.** Local-first cognition infrastructure for AI agents.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](package.json)
 
----
-
-## The problem
-
-AI coding agents waste tokens reconstructing context, over and over:
-
-- A new chat loses everything.
-- Claude Code doesn't know what Codex did.
-- Codex doesn't know what Cursor changed.
-- Multiple agents duplicate work and edit the same files.
-- Project decisions get lost.
-- Handoffs are terrible.
-
-Developers patch this by hand with `README.md`, `CLAUDE.md`, `TODO.md`, memory
-prompts and handoff prompts. It doesn't scale.
-
-## The solution
-
-Stated creates a **shared project brain** that lives _inside the repository_:
+A universal, event-sourced memory protocol for AI agents. Everything an agent
+learns, decides, creates, modifies, observes and completes becomes an immutable
+event in an append-only journal. **Memory, state, tasks, handoffs, context,
+coordination and knowledge are all *derived* from that journal** — never stored
+separately, never the source of truth.
 
 ```text
-project/
-└── .stated/
+History is truth.   State is a cache.   Snapshots are an optimization.   Events are forever.
 ```
 
-- **No cloud. No accounts. No telemetry. No AI models. No vector databases.
-  No embeddings. No external services. No SaaS.**
-- The repository is the source of truth — not a database, not a memory store.
-- Everything is human-readable, AI-readable, Git-friendly and merge-friendly.
-
-Any agent can instantly answer — without reading thousands of tokens:
-
-```text
-What are we building?
-What is the current task?
-What decisions were made?
-Who is working on what?
-What should I do next?
-```
+This is **not** a vector database, a RAG product, a memory framework, a task
+manager, or an agent framework. It is the foundational layer those things should
+be built *on top of*.
 
 ---
 
-## Install
+## Why
+
+Every agent today reconstructs context from scratch, can't see what another
+agent did, and loses decisions across sessions. The fix isn't a smarter cache —
+it's a shared, durable, append-only record of cognition that any tool can read
+and write. The `.agent/` directory is to AI memory what `.git` is to source.
+
+- **Local-first.** No cloud, no accounts, no telemetry, no proprietary storage.
+- **Concurrency-safe.** SQLite + WAL: many agents (Claude Code, Codex, Cursor,
+  OpenHands) append simultaneously with no lost updates, no corruption.
+- **Model/framework/language agnostic.** The journal is just events.
+- **Derivable.** Lose every cache and snapshot and you lose nothing — state
+  rebuilds from history.
+
+## Install — once, globally (recommended)
+
+Install it one time on your machine; your agents set up every project for you
+after that — you never run per-project install again.
 
 ```bash
-npm install -g stated
+npm install -g cairn
 ```
 
-## 30-second quickstart
+You're greeted with a graphical setup (truecolor banner + boxes in a real
+terminal; clean plain text when piped):
+
+```text
+  █████╗      ██╗██████╗
+ ██╔══██╗     ██║██╔══██╗
+ ███████║     ██║██████╔╝
+ ██╔══██║██   ██║██╔═══╝
+ ██║  ██║╚█████╔╝██║
+ ╚═╝  ╚═╝ ╚════╝ ╚═╝
+  Cairn  ·  the Git of AI memory
+
+  ╭─ Installed globally ───────────────────────────────────╮
+  │ ✓ taught all agents      ~/.config/cairn/AGENTS.md       │
+  │ ✓ taught Claude Code     ~/.claude/CLAUDE.md           │
+  ╰────────────────────────────────────────────────────────╯
+
+  ╭─ What happens now ──────────────────────────────────────╮
+  │ Installed once — you never set up a project again.      │
+  │                                                         │
+  │ When an agent opens any repo without a journal, it will │
+  │ run cairn setup itself and start recording.               │
+  ╰─────────────────────────────────────────────────────────╯
+```
+
+The global `postinstall` writes a tiny **bootstrap rule** into your *global*
+agent files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, a generic
+`~/.config/cairn/AGENTS.md`, plus `~/.gemini/GEMINI.md` if present). That rule
+tells every agent:
+
+> "When you start in a repo that has no `.agent/`, run `cairn setup` first."
+
+So from now on, the **agent** creates the journal and wires the project on its
+first visit — automatically. Your own content in those global files is kept (the
+rule lives in a managed `<!-- CAIRN-GLOBAL:… -->` block). Undo anytime with
+`cairn uninstall-global`; re-run with `cairn install-global`.
+
+### Or: per-project install (no global)
 
 ```bash
 cd your-project
-stated init
+npm install --save-dev cairn
 ```
 
-In **Claude Code**:
+A `postinstall` step then automatically:
 
-```text
-Build OAuth
-```
+1. **Creates the `.agent/` journal** in your project.
+2. **Teaches every coding agent how to use it** — it writes the Cairn usage rules
+   into the instruction files agents already read on their own
+   (`AGENTS.md`, `CLAUDE.md`, and any existing `GEMINI.md` / `.cursorrules` /
+   `.github/copilot-instructions.md`). Your own content in those files is kept;
+   the Cairn rules go in a managed block between markers.
 
-…which (via the MCP server) creates tasks, claims files and records decisions.
+No MCP, no manual wiring. The next time Claude Code, Codex, Cursor, Copilot or
+Gemini opens the repo, it reads those rules and starts recording to the journal
+with the `cairn` CLI.
 
-Open **Codex** later:
+Re-run anytime with `cairn setup` (add `--all` to also create the secondary agent
+files). Opt out of the auto-step with `CAIRN_NO_POSTINSTALL=1`. Prefer it global?
+`npm install -g cairn`, then `cairn setup` per project.
 
-```text
-Continue project
-```
+### How your agents use it (the rules they're taught)
 
-It instantly sees the current goal, current tasks, decisions, ownership and the
-recommended next steps — because they all live in `.stated/`.
+Agents are instructed to: **read before they write** (`cairn context` at session
+start), then **record each real action as one event** — task created/started/
+completed, decision made (with a reason), knowledge learned, file modified — and
+to **never edit `.agent/` by hand** (it's append-only; history is truth). The
+full ruleset lives in [docs/AGENT_RULES.md](docs/AGENT_RULES.md) and is what gets
+injected into the agent files.
 
----
-
-## How it works
-
-```text
-   Claude Code ─┐
-        Codex ──┤
-       Cursor ──┼──►  .stated/  (shared project state, committed to Git)
-    OpenHands ──┤
-       Humans ──┘
-```
-
-Stated is three things over one on-disk format:
-
-1. A **CLI** (`stated …`) for humans and shell scripts.
-2. An **SDK** (`import { Stated } from "stated"`) for programmatic use.
-3. An **MCP server** so any MCP-compatible agent reads/writes the same brain.
-
-### Repository structure
-
-```text
-.stated/
-├── project.md      # name, description, architecture, status (human-authored)
-├── goals.md        # ## Active / ## Completed bullet lists
-├── tasks.json      # the task board (canonical)
-├── decisions.md    # rendered decision log (from the event stream)
-├── agents.json     # registered agents + heartbeats
-├── files.json      # file ownership / soft locks
-├── handoff.md      # generated cache (gitignored by default)
-├── state.json      # generated cache (gitignored by default)
-├── events.jsonl    # append-only event history
-└── snapshots/      # timestamped restore points
-```
-
-`handoff.md` and `state.json` are **derived** — Stated regenerates them
-automatically after every task creation, task completion, decision, file claim
-or goal change. They are caches, gitignored by default, and safe to regenerate.
-
----
-
-## CLI
-
-```text
-stated init                       Create .stated/ in the current directory
-stated status                     Show the current shared project state
-stated state                      Print machine-readable state.json
-stated handoff                    Generate & print handoff.md
-stated search <query>             Keyword-search tasks, decisions & goals (--type, --limit)
-
-stated goal add <text>            Add an active goal
-stated goal complete <query>      Mark a matching active goal completed
-stated goal list                  List goals
-
-stated task add <title>           Create a task (--priority, --description)
-stated task list                  List tasks
-stated task claim <id>            Claim a task (--agent <name>)
-stated task start <id>            Mark a task active
-stated task complete <id>         Mark a task completed
-stated task block <id>            Mark a task blocked (--reason <text>)
-
-stated decision add <text>        Record a decision (--reason, --by, --supersedes)
-
-stated agent register <name>      Register / heartbeat an agent
-stated agent list                 List agents
-
-stated file claim <path>          Claim/lock a file (--agent <name>)
-stated file release <path>        Release a file
-stated file list                  List file ownership
-
-stated verify <id|path>           Re-confirm a task/lock is still true (resets decay)
-stated sync                       Reconcile Stated claims with git (proposes only)
-stated decay [--apply]            Run memory-decay policy (dry run unless --apply)
-
-stated snapshot                   Write a restore point to .stated/snapshots/
-stated doctor                     Validate .stated/ integrity
-stated mcp                        Start the MCP server (stdio)
-```
-
-Global flags: `--agent <name>` (or `STATED_AGENT` env), `--run <id>` (or
-`STATED_RUN` env, scopes tasks/decisions to a session), `--json`, `--force`,
-`--version`, `--help`.
-
-### Example session
+## Quickstart (manual, if you skipped the package)
 
 ```bash
-stated init
-stated agent register "Claude Code"
-stated goal add "Launch MailMeld"
-stated task add "Build OAuth" --priority high
-# → ✔ Task created: Build OAuth t_14cd6af8
-stated task claim t_14cd6af8 --agent "Claude Code"
-stated decision add "Use BullMQ" --reason "Reliable retries"
-stated file claim src/auth.ts --agent "Claude Code"
-stated handoff
+cd your-project
+cairn init          # journal + teach agents (same as the auto-setup)
+
+cairn append --type agent.registered --payload '{"name":"Claude Code"}' --actor "Claude Code"
+cairn append --type goal.created      --payload '{"id":"g1","title":"Launch MailMeld"}'
+cairn append --type task.created      --payload '{"id":"t1","title":"Build OAuth","priority":"high"}'
+cairn append --type task.started      --payload '{"id":"t1"}'
+cairn append --type decision.made     --payload '{"id":"d1","title":"Use SQLite","rationale":"WAL concurrency"}'
+
+cairn status
+cairn context --level small     # minimum-token context for an agent
+cairn timeline                  # human-readable "what happened"
+cairn doctor                    # health + integrity
 ```
 
----
+## Architecture (one screen)
+
+```text
+                 append events
+   agents  ─────────────────────►  .agent/journal.db  (SQLite, WAL, append-only)
+                                          │
+                                          │  pure, deterministic reducers
+                                          ▼
+                                    DerivedState
+                                          │
+        ┌──────────────┬─────────────┬────┴────────┬──────────────┐
+        ▼              ▼             ▼             ▼              ▼
+     state         context       timeline       memory        snapshots
+   (cache)       (compiler)    (what happened) (knowledge)  (optimization)
+```
+
+```text
+.agent/
+├── manifest.json     # protocol version, projectId, name
+├── events.jsonl      # ⭐ append-only SOURCE OF TRUTH — committed, merge-friendly
+├── CONTEXT.md        # tiny always-current "where were we" (committed; instant recall)
+├── journal.db        # SQLite (WAL) — fast CACHE, git-ignored, rebuilt from events.jsonl
+├── snapshots/        # materialized state caches (git-ignored)
+├── artifacts/        # large outputs referenced by events
+├── state/ indexes/ locks/   # derived/optimization (git-ignored)
+└── schemas/          # event payload schemas
+```
+
+**The committed source of truth is `events.jsonl`** — append-only and
+line-based, so it merges cleanly across branches. The SQLite `journal.db` is a
+fast query cache: it's git-ignored and **rebuilt deterministically from
+`events.jsonl`** on open (same `seq`, same `id`). So a fresh clone has no db yet
+— the first command rebuilds it. No binary-merge conflicts; `git` stays happy.
+See [ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## The event model
+
+Every event is immutable and shaped the same way:
+
+```jsonc
+{ "id": "01KT…", "seq": 42, "timestamp": "…", "actor": "Claude Code",
+  "sessionId": "…", "projectId": "…", "type": "decision.made",
+  "version": 1, "payload": { "title": "Use SQLite", "rationale": "WAL" } }
+```
+
+`seq` is a gap-free total order; `id` is a time-sortable ULID used for
+idempotency. Canonical types cover agents, goals, tasks, decisions, files,
+artifacts, knowledge, memory, messages, sessions and snapshots — plus open
+`custom.*` extensions. Full catalogue in [EVENT_MODEL.md](docs/EVENT_MODEL.md).
+
+Decisions and tasks have real lifecycles derived from events — e.g. a new
+`decision.made` with `supersedes` flips the prior decision to `superseded`, so
+consumers see exactly one active decision. See [PROTOCOL.md](docs/PROTOCOL.md).
 
 ## SDK
 
 ```ts
-import { Stated } from "stated";
+import { AgentJournal } from "cairn";
 
-// `agent` attributes every mutation and refreshes the agent's heartbeat.
-const stated = new Stated({ agent: "Claude Code" });
+const journal = new AgentJournal({ actor: "Claude Code" });
+journal.registerAgent();
 
-await stated.init(); // create .stated/ if missing
-await stated.registerAgent(); // announce yourself
+const { id } = journal.createTask({ title: "Build OAuth", priority: "high" });
+journal.startTask(id);
+journal.decide({ title: "Use SQLite", rationale: "WAL concurrency" });
 
-await stated.addGoal("Launch MailMeld");
-const task = await stated.addTask({ title: "Build OAuth", priority: "high" });
-await stated.claimTask(task.id); // owner defaults to the configured agent
-
-await stated.addDecision({
-  decision: "Use BullMQ",
-  reason: "Reliable retries",
-});
-await stated.claimFile("src/auth.ts");
-
-const state = await stated.getState(); // compact machine state
-const handoff = await stated.getHandoff(); // full handoff document
-
-await stated.completeTask(task.id);
-await stated.releaseFile("src/auth.ts");
+const ctx = journal.getContext("small");   // compiled, minimum-token
+const state = journal.getState();           // full derived state
+const timeline = journal.renderTimeline();  // human-readable
+journal.completeTask(id);
 ```
 
-Need the low-level synchronous functions? They are exported too:
-
-```ts
-import { buildState, addTask, claimFile } from "stated";
-```
-
----
+Low-level building blocks (`EventStore`, reducers, engines) are exported too.
+See [SDK.md](docs/SDK.md).
 
 ## MCP server
 
-Stated ships an MCP server so Claude Code, Codex, Cursor, OpenHands and any other
-MCP-compatible client can share the same project brain.
-
-**Tools:** `init_project`, `register_agent`, `get_state`, `get_handoff`,
-`generate_handoff`, `search_memory`, `create_task`, `claim_task`, `start_task`,
-`complete_task`, `create_decision`, `claim_file`, `release_file`, `verify_fact`,
-`run_decay`, `create_snapshot`.
-
-**Resources (read-only):** `stated://handoff`, `stated://state`,
-`stated://tasks`, `stated://agents`.
-
-### Claude Code
-
 ```bash
-claude mcp add stated -- stated mcp
+claude mcp add cairn -- cairn mcp
 ```
 
-### Cursor / Windsurf / generic clients
+Tools: `append_event`, `query_state`, `query_context`, `query_memory`,
+`query_timeline`, `register_agent`, `create_snapshot`, `get_active_tasks`,
+`get_active_decisions`. Resources: `cairn://state`, `cairn://context`.
+See [MCP.md](docs/MCP.md).
 
-Add to your MCP config (`.cursor/mcp.json`, `mcp.json`, etc.):
-
-```json
-{
-  "mcpServers": {
-    "stated": {
-      "command": "stated",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-The server operates on the project at `STATED_ROOT` (env) or the directory it is
-launched from. Set `STATED_ROOT` when your client launches the server from a
-different working directory:
-
-```json
-{
-  "mcpServers": {
-    "stated": {
-      "command": "stated",
-      "args": ["mcp"],
-      "env": { "STATED_ROOT": "/abs/path/to/project" }
-    }
-  }
-}
-```
-
-You can also run the dedicated binary directly: `stated-mcp`.
-
-### Recommended agent workflow
-
-1. `register_agent` once at the start of a session.
-2. `get_handoff` (or read `stated://handoff`) to load context in one shot.
-3. `claim_task` / `claim_file` before working so others don't duplicate effort.
-4. `create_decision` for any durable choice.
-5. `complete_task` / `release_file` when done.
-
----
-
-## Freshness & memory decay
-
-The most dangerous failure mode for a shared brain is going **stale and lying** —
-"Current Task: OAuth" when OAuth shipped weeks ago. Wrong structured data is worse
-than none. Stated defends against this in two layers.
-
-**Staleness signal (always on).** Every active task and file lock carries a
-`lastVerifiedAt` timestamp — set on creation, refreshed on every mutation, or
-reset explicitly with `stated verify <id|path>`. From it, Stated derives a
-`confidence` (`fresh` / `aging` / `stale`) at read time, so a fact can never be
-wrong-on-disk. It shows up everywhere:
+## CLI
 
 ```text
-$ stated status
-  Freshness   ⚠ 1 stale
-  Active Tasks
-    [claimed]   Build OAuth t_0a63af96 @Claude Code ⚠ stale (4 weeks)
+cairn init | status | append | state | timeline | context | sync | snapshot
+        | compact | prune | export | doctor | migrate | repair | mcp
 ```
 
-`handoff.md` gets a freshness banner + inline ages, `state.json` carries a
-`confidence` per fact plus a `freshness` summary, and `stated doctor` flags every
-stale fact — it's the rot detector. A stale fact **decays visibly instead of
-lying.**
+### Git auto-capture (zero agent effort)
 
-**Memory decay (opt-in cleanup).** When you want stale memory actually cleaned
-up, enable a decay policy in `.stated/config.json`. Everything defaults to `0`
-(off) — decay never mutates silently, only when you run `stated decay`:
+The hardest part of any agent-memory system is getting accurate data *in*. Cairn
+solves it by reading git instead of asking agents to hand-narrate file edits:
 
-```json
-{
-  "staleness": {
-    "task": { "agingHours": 24, "staleHours": 168 },
-    "lock": { "agingHours": 4, "staleHours": 24 }
-  },
-  "decay": {
-    "lockAutoReleaseHours": 0,
-    "completedTaskArchiveDays": 0,
-    "eventRetention": 0
-  }
-}
-```
+- `cairn setup` installs a git **post-commit hook** that runs `cairn sync`.
+- Every commit becomes `file.created` / `file.modified` / `file.deleted` events
+  plus a `git.commit` record, **attributed to the commit author**, derived
+  deterministically (idempotent — re-syncing never duplicates).
+- **Intent is extracted too.** `sync` reads commit messages and auto-records
+  decisions — structured (`Decision: …` / `Reason: …` lines) or heuristic (a
+  subject like "switch to PostgreSQL"), tagged `source: git-extracted`. So even
+  decisions land with near-zero effort. Disable with `cairn sync --no-extract`.
+- So even if an agent logs nothing, the journal still knows what changed, who
+  changed it, why, and when — because git does. Agents need only record the
+  intent git truly can't see (goals, nuanced rationale, task lifecycle).
 
 ```bash
-stated decay            # dry run — shows what would be cleaned
-stated decay --apply    # release abandoned locks, archive old completed
-                        # tasks, trim the event log (archived to snapshots/)
+cairn sync            # capture commits since the last sync (the hook does this for you)
+cairn sync --full     # on first run, capture the entire history
 ```
 
-The `staleness` thresholds also tune when facts turn `aging`/`stale`, so you can
-match the cadence of your project.
-
----
-
-## Design principles
-
-- **The repo is the source of truth.** State is committed to Git like code.
-- **Human- and AI-readable.** Markdown for humans, JSON for machines, both diffable.
-- **Merge-friendly.** Pretty-printed JSON with stable key order and trailing
-  newlines; an append-only `events.jsonl` instead of in-place rewrites for history.
-- **Crash-safe writes.** Every write is atomic (temp file + `fsync` + rename), so
-  a killed or concurrent process never leaves a half-written state file.
-- **Zero magic.** No models, no embeddings, no network. Just files and heuristics.
+- `cairn compact [--keep-recent N]` — cold-archive old events behind a snapshot so
+  the hot table stays fast at scale (events are moved, never lost).
+- `cairn prune [--idle-ms N]` — disconnect stale agents (records `agent.disconnected`).
 
 ## Performance
 
-Measured warm on a laptop SSD (`buildState`/handoff are pure derivation; mutations
-are durably `fsync`-flushed and auto-regenerate the snapshot):
+| Operation            | Target    | Measured |
+| -------------------- | --------- | -------- |
+| Append event         | < 5 ms    | sub-ms (batched ~0.01 ms/event) |
+| State derive         | < 5 ms\*  | snapshot+tail, ms-scale on realistic boards |
+| Context generation   | < 50 ms   | ✓ (asserted at 10–20k events) |
+| Timeline generation  | < 50 ms   | ✓ |
+| Cold start           | < 200 ms  | ✓ on realistic journals |
+| Scale                | 10M+ events | paged streaming + cold-archive compaction |
 
-| Operation                           | Target   | Typical |
-| ----------------------------------- | -------- | ------- |
-| `stated init`                       | < 100 ms | ~16 ms  |
-| State load (`getState`)             | < 5 ms   | ~0.3 ms |
-| Handoff generation                  | < 50 ms  | ~15 ms  |
-| Task claim (durable, auto-snapshot) | < 5 ms\* | ~19 ms  |
+\* via snapshot + tail replay; full cold replay scales linearly and is the
+fallback. The numbers above are enforced by `test/perf.test.ts` at 10–20k events
+(realistic project size). At pathological scale (e.g. 200k *simultaneously
+active* tasks) materializing the full board costs more — run `npm run bench`
+(default 10M; pass a count) for stress numbers on your hardware. Memory stays
+flat under streaming regardless of journal size (`test/perf.test.ts` asserts a
+bounded heap delta over a 50k-event stream). See
+[CONCURRENCY.md](docs/CONCURRENCY.md) for the safety model.
 
-\* The in-memory claim itself is sub-millisecond; the durable write path
-(`fsync` + automatic `handoff.md` / `state.json` regeneration) dominates. Set
-this aside only if you understand the durability trade-off.
+## Documentation
 
-## Framework detection
-
-On `init` Stated detects your stack (no network) and stores it in `state.json`:
-Next.js, React, Vue, Angular, Express, Fastify, Laravel, Django, Flask.
-
----
-
-## Development
-
-```bash
-npm install
-npm run build       # compile TypeScript to dist/
-npm test            # run the vitest suite
-npm run typecheck   # type-check without emitting
-```
-
-The codebase is layered:
-
-```text
-src/core/   canonical synchronous file API (one module per .stated file)
-src/sdk/    ergonomic async Stated class
-src/cli/    dependency-free argument parser + command handlers
-src/mcp/    MCP server (tools + resources) over the core API
-```
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md) — components and data flow
+- [PROTOCOL.md](docs/PROTOCOL.md) — the protocol specification
+- [EVENT_MODEL.md](docs/EVENT_MODEL.md) — event types and payloads
+- [CONCURRENCY.md](docs/CONCURRENCY.md) — the no-lost-updates guarantee
+- [MCP.md](docs/MCP.md) · [SDK.md](docs/SDK.md) · [MIGRATIONS.md](docs/MIGRATIONS.md)
+- [ROADMAP.md](docs/ROADMAP.md) · [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## License
 

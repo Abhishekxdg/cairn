@@ -1,392 +1,422 @@
+import { EventStore } from "../core/store.js";
+import { agentPaths, requireRoot, findRoot, isInitialized } from "../core/paths.js";
+import { init as coreInit, readManifest, type InitOptions } from "../core/manifest.js";
+import { shortId, ulid, nowIso } from "../core/ids.js";
 import type {
-  Agent,
-  AgentType,
-  Decision,
-  FileOwnership,
-  Goals,
-  ProjectInfo,
-  State,
-  StatedEvent,
-  SyncReport,
+  JournalEvent,
+  NewEvent,
+  EventQuery,
+  EventType,
+  Payload,
+  DerivedState,
   Task,
-  TaskPriority,
-} from "../core/index.js";
+  Decision,
+} from "../core/types.js";
+import { deriveState } from "../engines/state.js";
 import {
-  init as coreInit,
-  findProjectRoot,
-  requireProjectRoot,
-  isInitialized,
-  buildState,
-  generateHandoff,
+  compileContext,
+  type CompiledContext,
+  type ContextLevel,
+} from "../engines/context.js";
+import {
+  deriveTimeline,
+  deriveMemory,
+  deriveKnowledge,
+} from "../engines/memory.js";
+import { renderTimeline, type TimelineDay } from "../engines/timeline.js";
+import {
   createSnapshot,
-  regenerate,
-  readProject,
-  writeProject,
-  readGoals,
-  addGoal as coreAddGoal,
-  completeGoal as coreCompleteGoal,
-  readTasks,
-  getTask,
-  addTask as coreAddTask,
-  claimTask as coreClaimTask,
-  startTask as coreStartTask,
-  completeTask as coreCompleteTask,
-  blockTask as coreBlockTask,
-  updateTask as coreUpdateTask,
-  readDecisions,
-  addDecision as coreAddDecision,
-  readAgents,
-  registerAgent as coreRegisterAgent,
-  touchAgent,
-  readFiles,
-  claimFile as coreClaimFile,
-  releaseFile as coreReleaseFile,
-  verifyTask as coreVerifyTask,
-  verifyFile as coreVerifyFile,
-  fileOwner,
-  applyDecay,
-  syncProject,
-  loadConfig,
-  type StatedConfig,
-  type DecayReport,
-  readEvents,
-  searchProject,
-  doctor as coreDoctor,
-  type SearchHit,
-  type SearchOptions,
-  type AddTaskInput,
-  type UpdateTaskInput,
-  type AddDecisionInput,
-  type InitOptions,
-  type DoctorReport,
-} from "../core/index.js";
-
-export interface StatedOptions {
-  /**
-   * Project root containing `.stated/`. If omitted, the root is discovered by
-   * walking up from `cwd`.
-   */
-  cwd?: string;
-  /**
-   * Identity of the calling agent. When set, every mutation is attributed to
-   * this name and the agent's `lastSeen` heartbeat is refreshed.
-   */
-  agent?: string;
-  /**
-   * Session/run scope. When set, created tasks/decisions are tagged with this
-   * run id, and the `*InRun` helpers filter to it. Lets one project carry
-   * parallel work streams.
-   */
-  run?: string;
-}
+  snapshotDue,
+  type SnapshotPolicy,
+  DEFAULT_SNAPSHOT_POLICY,
+} from "../engines/snapshots.js";
+import {
+  health,
+  validateIntegrity,
+  repair,
+  type HealthMetrics,
+  type IntegrityReport,
+  type RepairReport,
+} from "../engines/observability.js";
+import { detectGit, gitCorrelation, type GitInfo } from "../engines/git.js";
+import { pruneAgents, staleAgents, type PruneReport } from "../engines/agents.js";
+import { compactJournal, type CompactionReport } from "../engines/compaction.js";
+import { syncGit, type GitSyncResult } from "../engines/gitsync.js";
+import { writeContextFile } from "../engines/recall.js";
 
 /**
- * Programmatic interface to a Stated project.
+ * AgentJournal — the high-level TypeScript SDK.
+ *
+ * One instance is one session. Every `append` is attributed to the configured
+ * actor + session, auto-snapshots when the policy is due, and is fully
+ * derivable later. All reads (`getState`, `getContext`, `getTimeline`,
+ * `getMemory`) are projections over the same immutable journal.
  *
  * ```ts
- * import { Stated } from "stated";
- *
- * const stated = new Stated({ agent: "Claude Code" });
- * const state = await stated.getState();
- * const handoff = await stated.getHandoff();
- * await stated.claimTask("t_a1b2c3d4");
+ * const journal = new AgentJournal({ actor: "Claude Code" });
+ * await journal.registerAgent();
+ * const task = await journal.createTask({ title: "Build OAuth" });
+ * await journal.completeTask(task);
+ * const ctx = await journal.getContext("small");
  * ```
- *
- * The API is async to keep the door open for future remote backends, but the
- * current implementation is backed by fast synchronous file IO.
  */
-export class Stated {
+export class AgentJournal {
   private readonly cwd: string;
-  /** The agent identity used to attribute mutations, if any. */
-  readonly agent: string | undefined;
-  /** The session/run scope applied to created tasks/decisions, if any. */
-  readonly run: string | undefined;
+  private readonly dbPath: string | undefined;
+  private readonly policy: SnapshotPolicy;
+  private store: EventStore | null = null;
 
-  constructor(options: StatedOptions = {}) {
-    this.cwd = options.cwd ?? process.cwd();
-    this.agent = options.agent;
-    this.run = options.run;
+  /** Actor name stamped on appended events. */
+  readonly actor: string;
+  /** Session id stamped on appended events. */
+  readonly sessionId: string;
+
+  constructor(
+    opts: {
+      cwd?: string;
+      actor?: string;
+      sessionId?: string;
+      dbPath?: string;
+      projectId?: string;
+      snapshotPolicy?: SnapshotPolicy;
+      autoGit?: boolean;
+    } = {},
+  ) {
+    this.cwd = opts.cwd ?? process.cwd();
+    this.actor = opts.actor ?? "unknown";
+    this.sessionId = opts.sessionId ?? shortId("sess");
+    this.dbPath = opts.dbPath;
+    this.policy = opts.snapshotPolicy ?? DEFAULT_SNAPSHOT_POLICY;
+    this.autoGit = opts.autoGit ?? true;
+    this.explicitProjectId = opts.projectId;
   }
 
-  /** Resolve the project root, throwing if Stated is not initialized. */
-  get root(): string {
-    return requireProjectRoot(this.cwd);
+  private readonly autoGit: boolean;
+  private readonly explicitProjectId: string | undefined;
+
+  /** Initialize a `.agent/` journal in the cwd. */
+  static init(cwd: string = process.cwd(), opts: InitOptions = {}) {
+    return coreInit(cwd, opts);
   }
 
-  /** Whether a `.stated/` directory exists at or above the cwd. */
+  /** Whether a journal exists at or above the cwd. */
   isInitialized(): boolean {
-    return isInitialized(this.cwd);
+    return this.dbPath ? true : isInitialized(this.cwd);
   }
 
-  /** The project root, or `null` if uninitialized. */
-  findRoot(): string | null {
-    return findProjectRoot(this.cwd);
+  /** Resolve the project root (throws if uninitialized, unless using dbPath). */
+  get root(): string {
+    return requireRoot(this.cwd);
   }
 
-  /** Heartbeat the configured agent (no-op if none set or unregistered). */
-  private touch(): void {
-    if (this.agent) touchAgent(this.root, this.agent);
+  /** Lazily open (and cache) the event store. */
+  get db(): EventStore {
+    if (!this.store) {
+      if (this.dbPath) {
+        this.store = new EventStore(this.dbPath, {
+          ...(this.explicitProjectId ? { projectId: this.explicitProjectId } : {}),
+        });
+      } else {
+        const paths = agentPaths(this.root);
+        this.store = new EventStore(paths.db);
+      }
+    }
+    return this.store;
   }
 
-  // --- Lifecycle -------------------------------------------------------------
-
-  /** Initialize `.stated/` in the cwd (or `options`-provided root). */
-  async init(options: InitOptions = {}): Promise<string> {
-    const result = coreInit(this.cwd, options);
-    return result.root;
+  /** Close the underlying database. */
+  close(): void {
+    this.store?.close();
+    this.store = null;
   }
 
-  /** Read the compact machine state (`state.json`), freshly computed. */
-  async getState(): Promise<State> {
-    return buildState(this.root);
+  // --- Append ----------------------------------------------------------------
+
+  /** Append a raw event. Auto-attributes actor/session and snapshots if due. */
+  appendEvent<P extends Payload = Payload>(
+    input: NewEvent<P>,
+  ): JournalEvent<P> {
+    const enriched: NewEvent<P> = {
+      ...input,
+      actor: input.actor ?? this.actor,
+      sessionId: input.sessionId ?? this.sessionId,
+    };
+    if (this.autoGit && !this.dbPath) {
+      const corr = gitCorrelation(this.root);
+      if (Object.keys(corr).length) {
+        enriched.payload = { ...(input.payload ?? {}), ...corr } as P;
+      }
+    }
+    const ev = this.db.appendEvent(enriched);
+    this.maybeSnapshot();
+    return ev;
   }
 
-  /** Read the project status: state plus a one-line summary. */
-  async status(): Promise<State> {
-    return buildState(this.root);
+  /** Sugar over {@link appendEvent}. */
+  append<P extends Payload = Payload>(
+    type: EventType,
+    payload?: P,
+    opts: Omit<NewEvent<P>, "type" | "payload"> = {},
+  ): JournalEvent<P> {
+    return this.appendEvent<P>({ type, ...(payload ? { payload } : {}), ...opts });
   }
 
-  /** Generate and return the handoff document. */
-  async getHandoff(): Promise<string> {
-    return generateHandoff(this.root);
+  /** Append many events atomically. */
+  batchAppend(inputs: NewEvent[]): JournalEvent[] {
+    const enriched = inputs.map((i) => ({
+      ...i,
+      actor: i.actor ?? this.actor,
+      sessionId: i.sessionId ?? this.sessionId,
+    }));
+    const events = this.db.batchAppend(enriched);
+    this.maybeSnapshot();
+    return events;
   }
 
-  /** Alias of {@link getHandoff} for parity with the CLI verb. */
-  async generateHandoff(): Promise<string> {
-    return generateHandoff(this.root);
+  private maybeSnapshot(): void {
+    if (snapshotDue(this.db, this.policy)) {
+      createSnapshot(this.db, deriveState(this.db));
+    }
+    // Keep the instant-recall file current after every state change. Never let
+    // a recall-write failure break an append.
+    try {
+      writeContextFile(this.db, this.dbPath ? this.cwd : this.root);
+    } catch {
+      /* recall file is best-effort */
+    }
   }
 
-  /** Force a regeneration of derived files and return the new state. */
-  async refresh(): Promise<State> {
-    return regenerate(this.root);
+  // --- Query / derive --------------------------------------------------------
+
+  /** Query raw events. */
+  events(query: EventQuery = {}): JournalEvent[] {
+    return this.db.queryEvents(query);
   }
 
-  /** Write a timestamped restore point; returns the snapshot directory. */
-  async snapshot(): Promise<string> {
-    return createSnapshot(this.root);
+  /** Export the full journal. */
+  exportEvents(): JournalEvent[] {
+    return this.db.exportEvents();
   }
 
-  /** Run integrity diagnostics. */
-  async doctor(): Promise<DoctorReport> {
-    return coreDoctor(this.root);
+  /** Derive current state. */
+  getState(opts: { fromScratch?: boolean } = {}): DerivedState {
+    return deriveState(this.db, opts);
   }
 
-  // --- Project ---------------------------------------------------------------
-
-  async getProject(): Promise<ProjectInfo> {
-    return readProject(this.root);
+  /** Compile minimum-token context at a level. */
+  getContext(level: ContextLevel = "medium"): CompiledContext {
+    const ctx = compileContext(this.db, { level });
+    // Record that context was generated (observability / replay completeness).
+    this.db.appendEvent({
+      type: "context.generated",
+      actor: this.actor,
+      sessionId: this.sessionId,
+      payload: { level, asOfSeq: ctx.asOfSeq },
+    });
+    return ctx;
   }
 
-  async setProject(info: ProjectInfo): Promise<void> {
-    writeProject(this.root, info);
-    regenerate(this.root);
+  /** Derive a day-grouped timeline. */
+  getTimeline(opts: { sinceSeq?: number; types?: string[] } = {}): TimelineDay[] {
+    return deriveTimeline(this.db, opts);
   }
 
-  // --- Goals -----------------------------------------------------------------
-
-  async getGoals(): Promise<Goals> {
-    return readGoals(this.root);
+  /** Render the timeline to human-readable text. */
+  renderTimeline(opts: { sinceSeq?: number; types?: string[] } = {}): string {
+    return renderTimeline(this.getTimeline(opts));
   }
 
-  async addGoal(goal: string): Promise<Goals> {
-    this.touch();
-    const result = coreAddGoal(this.root, goal, this.agent);
-    regenerate(this.root);
-    return result;
+  /** Derive recorded memories. */
+  getMemory() {
+    return deriveMemory(this.db);
   }
 
-  async completeGoal(query: string): Promise<Goals> {
-    this.touch();
-    const result = coreCompleteGoal(this.root, query, this.agent);
-    regenerate(this.root);
-    return result;
+  /** Derive currently-valid knowledge. */
+  getKnowledge(opts: { includeInvalid?: boolean } = {}) {
+    return deriveKnowledge(this.db, opts);
   }
 
-  // --- Agents ----------------------------------------------------------------
+  // --- Snapshots / ops -------------------------------------------------------
 
-  async getAgents(): Promise<Agent[]> {
-    return readAgents(this.root);
+  /** Force a snapshot now and return its sequence. */
+  snapshot(): number {
+    const snap = createSnapshot(this.db, deriveState(this.db));
+    this.db.appendEvent({
+      type: "snapshot.created",
+      actor: this.actor,
+      sessionId: this.sessionId,
+      payload: { seq: snap.seq, snapshotId: snap.id },
+    });
+    return snap.seq;
   }
 
-  /** Register an agent. Defaults to the SDK's configured agent identity. */
-  async registerAgent(name?: string, type?: AgentType): Promise<Agent> {
-    const who = name ?? this.agent;
-    if (!who)
-      throw new Error("registerAgent requires a name or a configured agent.");
-    return coreRegisterAgent(this.root, who, type);
+  /** Prune stale agents (records `agent.disconnected`). */
+  prune(opts: { idleMs?: number } = {}): PruneReport {
+    return pruneAgents(this.db, { ...opts, actor: this.actor });
+  }
+  /** Agents currently considered stale (read-only). */
+  staleAgents(opts: { idleMs?: number } = {}) {
+    return staleAgents(this.db, opts);
+  }
+  /** Cold-archive old events behind a snapshot to keep the hot table small. */
+  compactJournal(opts: { keepRecent?: number } = {}): CompactionReport {
+    return compactJournal(this.db, opts);
   }
 
-  // --- Tasks -----------------------------------------------------------------
-
-  async getTasks(): Promise<Task[]> {
-    const tasks = readTasks(this.root);
-    return this.run ? tasks.filter((t) => t.runId === this.run) : tasks;
+  /**
+   * Auto-capture file events from git history (zero agent effort). Idempotent;
+   * typically wired to a git post-commit hook by `cairn setup`.
+   */
+  sync(opts: { full?: boolean; extractIntent?: boolean } = {}): GitSyncResult {
+    const root = this.dbPath ? this.cwd : this.root;
+    const res = syncGit(this.db, root, opts);
+    try {
+      writeContextFile(this.db, root);
+    } catch {
+      /* best-effort */
+    }
+    return res;
   }
 
-  async getTask(id: string): Promise<Task | undefined> {
-    return getTask(this.root, id);
+  /** The instant-recall context (also persisted to `.agent/CONTEXT.md`). */
+  recall() {
+    return writeContextFile(this.db, this.dbPath ? this.cwd : this.root);
   }
 
-  async addTask(input: AddTaskInput | string): Promise<Task> {
-    this.touch();
-    const base: AddTaskInput =
-      typeof input === "string" ? { title: input } : { ...input };
-    // The configured run scope applies unless the call overrides it.
-    const normalized: AddTaskInput =
-      this.run && base.runId === undefined
-        ? { ...base, runId: this.run }
-        : base;
-    return coreAddTask(this.root, normalized, this.agent);
+  health(): HealthMetrics {
+    return health(this.db);
+  }
+  validate(): IntegrityReport {
+    return validateIntegrity(this.db);
+  }
+  repair(): RepairReport {
+    return repair(this.db);
+  }
+  compact() {
+    return this.db.compact();
+  }
+  git(): GitInfo {
+    return detectGit(this.dbPath ? this.cwd : this.root);
+  }
+  manifest() {
+    return readManifest(this.root);
   }
 
-  /** Claim a task. Owner defaults to the configured agent. */
-  async claimTask(
-    id: string,
-    owner?: string,
-    opts: { force?: boolean } = {},
-  ): Promise<Task> {
-    const who = owner ?? this.agent;
-    if (!who)
-      throw new Error("claimTask requires an owner or a configured agent.");
-    this.touch();
-    return coreClaimTask(this.root, id, who, opts);
-  }
+  // --- Convenience emitters --------------------------------------------------
 
-  async startTask(id: string): Promise<Task> {
-    this.touch();
-    return coreStartTask(this.root, id, this.agent);
-  }
-
-  async completeTask(id: string): Promise<Task> {
-    this.touch();
-    return coreCompleteTask(this.root, id, this.agent);
-  }
-
-  async blockTask(id: string, reason?: string): Promise<Task> {
-    this.touch();
-    return coreBlockTask(this.root, id, reason, this.agent);
-  }
-
-  async updateTask(id: string, patch: UpdateTaskInput): Promise<Task> {
-    this.touch();
-    return coreUpdateTask(this.root, id, patch, this.agent);
-  }
-
-  // --- Decisions -------------------------------------------------------------
-
-  async getDecisions(): Promise<Decision[]> {
-    const decisions = readDecisions(this.root);
-    return this.run ? decisions.filter((d) => d.runId === this.run) : decisions;
-  }
-
-  async addDecision(input: AddDecisionInput | string): Promise<Decision> {
-    this.touch();
-    const base: AddDecisionInput =
-      typeof input === "string" ? { decision: input } : { ...input };
-    const normalized: AddDecisionInput =
-      this.run && base.runId === undefined
-        ? { ...base, runId: this.run }
-        : base;
-    return coreAddDecision(this.root, normalized, this.agent);
-  }
-
-  // --- Files -----------------------------------------------------------------
-
-  async getFiles(): Promise<FileOwnership[]> {
-    return readFiles(this.root);
-  }
-
-  /** Claim/lock a file. Owner defaults to the configured agent. */
-  async claimFile(
-    path: string,
-    owner?: string,
-    opts: { lock?: boolean; force?: boolean } = {},
-  ): Promise<FileOwnership> {
-    const who = owner ?? this.agent;
-    if (!who)
-      throw new Error("claimFile requires an owner or a configured agent.");
-    this.touch();
-    return coreClaimFile(this.root, path, who, opts);
-  }
-
-  async releaseFile(
-    path: string,
-    opts: { force?: boolean } = {},
-  ): Promise<boolean> {
-    this.touch();
-    return coreReleaseFile(this.root, path, {
-      ...(this.agent ? { owner: this.agent } : {}),
-      ...opts,
+  registerAgent(
+    name: string = this.actor,
+    opts: { type?: string; version?: string; capabilities?: string[] } = {},
+  ): JournalEvent {
+    return this.append("agent.registered", {
+      name,
+      ...(opts.type ? { type: opts.type } : {}),
+      ...(opts.version ? { version: opts.version } : {}),
+      ...(opts.capabilities ? { capabilities: opts.capabilities } : {}),
+      session: this.sessionId,
     });
   }
 
-  // --- Freshness / decay -----------------------------------------------------
-
-  /** Re-confirm a task is still accurate (refreshes its staleness clock). */
-  async verifyTask(id: string): Promise<Task> {
-    this.touch();
-    return coreVerifyTask(this.root, id, this.agent);
+  heartbeat(name: string = this.actor): JournalEvent {
+    return this.append("agent.heartbeat", { name, session: this.sessionId });
   }
 
-  /** Re-confirm a file claim is still active (refreshes its staleness clock). */
-  async verifyFile(path: string): Promise<FileOwnership> {
-    this.touch();
-    return coreVerifyFile(this.root, path, this.agent);
+  createGoal(input: { title: string; description?: string; id?: string }) {
+    const id = input.id ?? shortId("goal");
+    this.append("goal.created", {
+      id,
+      title: input.title,
+      ...(input.description ? { description: input.description } : {}),
+    });
+    return id;
   }
 
-  /**
-   * Re-confirm a fact by id (task) or path (file claim). Resolves whichever
-   * exists. Throws if neither matches.
-   */
-  async verify(idOrPath: string): Promise<Task | FileOwnership> {
-    if (getTask(this.root, idOrPath)) return this.verifyTask(idOrPath);
-    if (fileOwner(this.root, idOrPath)) return this.verifyFile(idOrPath);
-    throw new Error(`No task or file claim matching "${idOrPath}".`);
+  createTask(input: {
+    title: string;
+    description?: string;
+    priority?: Task["priority"];
+    owner?: string;
+    dependencies?: string[];
+    id?: string;
+  }): { id: string } {
+    const id = input.id ?? shortId("task");
+    this.append("task.created", {
+      id,
+      title: input.title,
+      ...(input.description ? { description: input.description } : {}),
+      ...(input.priority ? { priority: input.priority } : {}),
+      ...(input.owner ? { owner: input.owner } : {}),
+      ...(input.dependencies ? { dependencies: input.dependencies } : {}),
+      createdBy: this.actor,
+    });
+    return { id };
   }
 
-  /** The resolved project configuration (defaults if no config.json). */
-  async getConfig(): Promise<StatedConfig> {
-    return loadConfig(this.root);
+  startTask(task: string | { id: string }, owner?: string) {
+    return this.append("task.started", {
+      id: typeof task === "string" ? task : task.id,
+      ...(owner ? { owner } : {}),
+    });
   }
-
-  /**
-   * Run the customizable memory-decay policy. Dry run by default — pass
-   * `{ apply: true }` to actually release stale locks / archive old tasks /
-   * trim events. All policies are off unless enabled in `.stated/config.json`.
-   */
-  async decay(opts: { apply?: boolean } = {}): Promise<DecayReport> {
-    return applyDecay(this.root, opts);
+  blockTask(task: string | { id: string }, reason?: string) {
+    return this.append("task.blocked", {
+      id: typeof task === "string" ? task : task.id,
+      ...(reason ? { reason } : {}),
+    });
   }
-
-  /** Reconcile claims against git reality. Proposes corrections only. */
-  async sync(): Promise<SyncReport> {
-    return syncProject(this.root, {
-      ...(this.agent ? { actor: this.agent } : {}),
+  completeTask(task: string | { id: string }) {
+    return this.append("task.completed", {
+      id: typeof task === "string" ? task : task.id,
+      completedBy: this.actor,
     });
   }
 
-  // --- Search ----------------------------------------------------------------
-
-  /**
-   * Keyword-search tasks, decisions and goals with BM25 (no embeddings).
-   * Returns ranked hits, highest score first.
-   */
-  async search(query: string, opts: SearchOptions = {}): Promise<SearchHit[]> {
-    const scoped: SearchOptions =
-      this.run && opts.run === undefined ? { ...opts, run: this.run } : opts;
-    return searchProject(this.root, query, scoped);
+  decide(input: {
+    title: string;
+    rationale?: string;
+    supersedes?: string;
+    id?: string;
+  }): { id: string } {
+    const id = input.id ?? shortId("dec");
+    this.append("decision.made", {
+      id,
+      title: input.title,
+      ...(input.rationale ? { rationale: input.rationale } : {}),
+      ...(input.supersedes ? { supersedes: input.supersedes } : {}),
+      madeBy: this.actor,
+    });
+    return { id };
+  }
+  revertDecision(id: string) {
+    return this.append("decision.reverted", { id });
   }
 
-  // --- Events ----------------------------------------------------------------
+  learn(statement: string, source?: string): { id: string } {
+    const id = shortId("kn");
+    this.append("knowledge.learned", {
+      id,
+      statement,
+      ...(source ? { source } : {}),
+    });
+    return { id };
+  }
 
-  async getEvents(): Promise<StatedEvent[]> {
-    return readEvents(this.root);
+  recordMemory(content: string, tags: string[] = []): { id: string } {
+    const id = shortId("mem");
+    this.append("memory.recorded", { id, content, tags });
+    return { id };
+  }
+
+  fileTouched(path: string, kind: "created" | "modified" | "deleted" = "modified") {
+    return this.append(`file.${kind}`, { path, owner: this.actor });
   }
 }
 
-/** Convenience factory mirroring `new Stated(options)`. */
-export function createStated(options?: StatedOptions): Stated {
-  return new Stated(options);
+/** Factory mirroring `new AgentJournal(opts)`. */
+export function createJournal(
+  opts?: ConstructorParameters<typeof AgentJournal>[0],
+): AgentJournal {
+  return new AgentJournal(opts);
 }
 
-export type { StatedOptions as StatedSdkOptions };
+export { ulid, nowIso };

@@ -1,39 +1,30 @@
 {
-  "name": "stated",
-  "version": "0.1.0",
-  "description": "Shared state layer for AI coding agents. Git for AI work — let Claude Code, Codex, Cursor and OpenHands collaborate without losing context.",
+  "name": "cairn",
+  "version": "0.1.2",
+  "description": "The Git of AI memory — a universal, local-first, event-sourced memory protocol for AI agents. Everything (memory, state, tasks, context) is derived from an append-only journal.",
   "type": "module",
   "license": "MIT",
-  "author": "Stated contributors",
-  "homepage": "https://github.com/stated-dev/stated#readme",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/stated-dev/stated.git"
-  },
-  "bugs": {
-    "url": "https://github.com/stated-dev/stated/issues"
-  },
+  "author": "Cairn contributors",
   "keywords": [
     "ai",
     "agents",
+    "event-sourcing",
+    "journal",
+    "memory",
+    "protocol",
+    "mcp",
+    "sqlite",
+    "local-first",
     "claude-code",
     "codex",
     "cursor",
-    "openhands",
-    "mcp",
-    "model-context-protocol",
-    "shared-state",
-    "handoff",
-    "coordination",
-    "context",
-    "cli"
+    "openhands"
   ],
   "bin": {
-    "stated": "bin/stated.js",
-    "stated-mcp": "bin/stated-mcp.js"
+    "cairn": "bin/cairn.js",
+    "cairn-mcp": "bin/cairn-mcp.js"
   },
   "main": "./dist/index.js",
-  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
@@ -48,7 +39,9 @@
   "files": [
     "dist",
     "bin",
+    "scripts",
     "README.md",
+    "docs",
     "LICENSE"
   ],
   "engines": {
@@ -56,20 +49,27 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "tsc -p tsconfig.json --watch",
     "clean": "rm -rf dist",
+    "postinstall": "node scripts/postinstall.mjs",
     "prepublishOnly": "npm run clean && npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "CAIRN_COVERAGE=1 vitest run --coverage",
+    "bench": "npm run build && node scripts/bench.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "stated": "node bin/stated.js"
+    "cairn": "node bin/cairn.js",
+    "wedge": "node scripts/wedge-eval.mjs",
+    "wedge:tokens": "npm run build && node scripts/wedge-tokens.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
+    "better-sqlite3": "^11.7.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^22.10.0",
+    "@vitest/coverage-v8": "^2.1.9",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }

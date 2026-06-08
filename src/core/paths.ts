@@ -1,98 +1,78 @@
 import { join, resolve } from "node:path";
 import { existsSync } from "node:fs";
 
-/** Name of the directory that holds all Stated project state. */
-export const STATED_DIR = ".stated";
+/** The directory that holds the journal — the `.git` of cognition. */
+export const AGENT_DIR = ".agent";
 
-/** Relative file names inside `.stated/`. */
-export const FILE = {
-  project: "project.md",
-  goals: "goals.md",
-  tasks: "tasks.json",
-  decisions: "decisions.md",
-  agents: "agents.json",
-  files: "files.json",
-  handoff: "handoff.md",
-  state: "state.json",
-  events: "events.jsonl",
-  config: "config.json",
-  gitignore: ".gitignore",
+/** Layout of the `.agent/` directory. */
+export const LAYOUT = {
+  manifest: "manifest.json",
+  db: "journal.db",
+  events: "events", // jsonl export mirror (portability)
   snapshots: "snapshots",
+  artifacts: "artifacts",
+  indexes: "indexes",
+  locks: "locks",
+  state: "state",
+  schemas: "schemas",
 } as const;
 
-/** Resolved absolute paths for a given project root. */
-export interface StatedPaths {
-  /** The project root (directory that contains `.stated/`). */
+/** Resolved absolute paths for a project's `.agent/` directory. */
+export interface AgentPaths {
   root: string;
-  /** The `.stated/` directory itself. */
   dir: string;
-  project: string;
-  goals: string;
-  tasks: string;
-  decisions: string;
-  agents: string;
-  files: string;
-  handoff: string;
-  state: string;
+  manifest: string;
+  db: string;
   events: string;
-  config: string;
-  gitignore: string;
   snapshots: string;
+  artifacts: string;
+  indexes: string;
+  locks: string;
+  state: string;
+  schemas: string;
 }
 
-/** Build the set of absolute paths for a project root. */
-export function statedPaths(root: string): StatedPaths {
+/** Build absolute `.agent/` paths for a project root. */
+export function agentPaths(root: string): AgentPaths {
   const r = resolve(root);
-  const dir = join(r, STATED_DIR);
+  const dir = join(r, AGENT_DIR);
   return {
     root: r,
     dir,
-    project: join(dir, FILE.project),
-    goals: join(dir, FILE.goals),
-    tasks: join(dir, FILE.tasks),
-    decisions: join(dir, FILE.decisions),
-    agents: join(dir, FILE.agents),
-    files: join(dir, FILE.files),
-    handoff: join(dir, FILE.handoff),
-    state: join(dir, FILE.state),
-    events: join(dir, FILE.events),
-    config: join(dir, FILE.config),
-    gitignore: join(dir, FILE.gitignore),
-    snapshots: join(dir, FILE.snapshots),
+    manifest: join(dir, LAYOUT.manifest),
+    db: join(dir, LAYOUT.db),
+    events: join(dir, LAYOUT.events),
+    snapshots: join(dir, LAYOUT.snapshots),
+    artifacts: join(dir, LAYOUT.artifacts),
+    indexes: join(dir, LAYOUT.indexes),
+    locks: join(dir, LAYOUT.locks),
+    state: join(dir, LAYOUT.state),
+    schemas: join(dir, LAYOUT.schemas),
   };
 }
 
-/**
- * Walk upward from `start` looking for a directory that contains `.stated/`.
- * Returns the project root, or `null` if none is found before the filesystem
- * root. This lets the CLI be invoked from any subdirectory of the project.
- */
-export function findProjectRoot(start: string = process.cwd()): string | null {
+/** Walk up from `start` to find a directory containing `.agent/`. */
+export function findRoot(start: string = process.cwd()): string | null {
   let current = resolve(start);
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    if (existsSync(join(current, STATED_DIR))) return current;
+    if (existsSync(join(current, AGENT_DIR))) return current;
     const parent = resolve(current, "..");
     if (parent === current) return null;
     current = parent;
   }
 }
 
-/**
- * Resolve the project root, throwing a friendly error when Stated has not been
- * initialized anywhere up the tree.
- */
-export function requireProjectRoot(start: string = process.cwd()): string {
-  const root = findProjectRoot(start);
+/** Resolve the project root or throw a friendly error. */
+export function requireRoot(start: string = process.cwd()): string {
+  const root = findRoot(start);
   if (!root) {
-    throw new Error(
-      "No .stated/ directory found. Run `stated init` in your project root first.",
-    );
+    throw new Error("No .agent/ journal found. Run `cairn init` first.");
   }
   return root;
 }
 
-/** Whether a project has been initialized at (or above) `start`. */
+/** Whether a journal exists at or above `start`. */
 export function isInitialized(start: string = process.cwd()): boolean {
-  return findProjectRoot(start) !== null;
+  return findRoot(start) !== null;
 }
