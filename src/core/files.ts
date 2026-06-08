@@ -1,5 +1,5 @@
 import type { FileOwnership } from "./types.js";
-import { readJson, writeJson } from "./io.js";
+import { readJson, writeJson, withProjectLock } from "./io.js";
 import { statedPaths } from "./paths.js";
 import { nowIso } from "./ids.js";
 import { appendEvent } from "./events.js";
@@ -30,7 +30,10 @@ export function writeFiles(root: string, files: FileOwnership[]): void {
 }
 
 /** Look up the ownership record for a path, if any. */
-export function fileOwner(root: string, path: string): FileOwnership | undefined {
+export function fileOwner(
+  root: string,
+  path: string,
+): FileOwnership | undefined {
   const p = normalizePath(path);
   return readFiles(root).find((f) => f.path === p);
 }
@@ -50,39 +53,41 @@ export function claimFile(
   owner: string,
   opts: { lock?: boolean; force?: boolean } = {},
 ): FileOwnership {
-  const p = normalizePath(path);
-  const o = owner.trim();
-  if (!p) throw new Error("File path cannot be empty.");
-  if (!o) throw new Error("Claiming a file requires an owner.");
+  return withProjectLock(root, () => {
+    const p = normalizePath(path);
+    const o = owner.trim();
+    if (!p) throw new Error("File path cannot be empty.");
+    if (!o) throw new Error("Claiming a file requires an owner.");
 
-  const files = readFiles(root);
-  const existing = files.find((f) => f.path === p);
-  if (existing && existing.locked && existing.owner !== o && !opts.force) {
-    throw new Error(
-      `File ${p} is locked by "${existing.owner}". Pass force to override.`,
-    );
-  }
+    const files = readFiles(root);
+    const existing = files.find((f) => f.path === p);
+    if (existing && existing.locked && existing.owner !== o && !opts.force) {
+      throw new Error(
+        `File ${p} is locked by "${existing.owner}". Pass force to override.`,
+      );
+    }
 
-  const now = nowIso();
-  const record: FileOwnership = {
-    path: p,
-    owner: o,
-    locked: opts.lock ?? true,
-    claimedAt: now,
-    lastVerifiedAt: now,
-  };
-  if (existing) {
-    Object.assign(existing, record);
-  } else {
-    files.push(record);
-  }
-  writeFiles(root, files);
-  appendEvent(root, "file_claimed", {
-    actor: o,
-    data: { path: p, owner: o, locked: record.locked },
+    const now = nowIso();
+    const record: FileOwnership = {
+      path: p,
+      owner: o,
+      locked: opts.lock ?? true,
+      claimedAt: now,
+      lastVerifiedAt: now,
+    };
+    if (existing) {
+      Object.assign(existing, record);
+    } else {
+      files.push(record);
+    }
+    writeFiles(root, files);
+    appendEvent(root, "file_claimed", {
+      actor: o,
+      data: { path: p, owner: o, locked: record.locked },
+    });
+    regenerate(root);
+    return record;
   });
-  regenerate(root);
-  return record;
 }
 
 /**
@@ -94,18 +99,20 @@ export function verifyFile(
   path: string,
   actor?: string,
 ): FileOwnership {
-  const p = normalizePath(path);
-  const files = readFiles(root);
-  const record = files.find((f) => f.path === p);
-  if (!record) throw new Error(`No claim on "${p}".`);
-  record.lastVerifiedAt = nowIso();
-  writeFiles(root, files);
-  appendEvent(root, "memory_verified", {
-    ...(actor ? { actor } : {}),
-    data: { kind: "file", path: p },
+  return withProjectLock(root, () => {
+    const p = normalizePath(path);
+    const files = readFiles(root);
+    const record = files.find((f) => f.path === p);
+    if (!record) throw new Error(`No claim on "${p}".`);
+    record.lastVerifiedAt = nowIso();
+    writeFiles(root, files);
+    appendEvent(root, "memory_verified", {
+      ...(actor ? { actor } : {}),
+      data: { kind: "file", path: p },
+    });
+    regenerate(root);
+    return record;
   });
-  regenerate(root);
-  return record;
 }
 
 /**
@@ -117,28 +124,30 @@ export function releaseFile(
   path: string,
   opts: { owner?: string; force?: boolean } = {},
 ): boolean {
-  const p = normalizePath(path);
-  const files = readFiles(root);
-  const idx = files.findIndex((f) => f.path === p);
-  if (idx === -1) return false;
-  const record = files[idx]!;
-  if (
-    opts.owner &&
-    record.owner !== opts.owner &&
-    record.locked &&
-    !opts.force
-  ) {
-    throw new Error(
-      `File ${p} is owned by "${record.owner}", not "${opts.owner}". ` +
-        "Pass force to override.",
-    );
-  }
-  files.splice(idx, 1);
-  writeFiles(root, files);
-  appendEvent(root, "file_released", {
-    ...(opts.owner ? { actor: opts.owner } : {}),
-    data: { path: p },
+  return withProjectLock(root, () => {
+    const p = normalizePath(path);
+    const files = readFiles(root);
+    const idx = files.findIndex((f) => f.path === p);
+    if (idx === -1) return false;
+    const record = files[idx]!;
+    if (
+      opts.owner &&
+      record.owner !== opts.owner &&
+      record.locked &&
+      !opts.force
+    ) {
+      throw new Error(
+        `File ${p} is owned by "${record.owner}", not "${opts.owner}". ` +
+          "Pass force to override.",
+      );
+    }
+    files.splice(idx, 1);
+    writeFiles(root, files);
+    appendEvent(root, "file_released", {
+      ...(opts.owner ? { actor: opts.owner } : {}),
+      data: { path: p },
+    });
+    regenerate(root);
+    return true;
   });
-  regenerate(root);
-  return true;
 }

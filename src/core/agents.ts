@@ -1,5 +1,5 @@
 import type { Agent, AgentStatus, AgentType } from "./types.js";
-import { readJson, writeJson } from "./io.js";
+import { readJson, writeJson, withProjectLock } from "./io.js";
 import { statedPaths } from "./paths.js";
 import { nowIso } from "./ids.js";
 import { appendEvent } from "./events.js";
@@ -40,44 +40,48 @@ export function registerAgent(
   name: string,
   type?: AgentType,
 ): Agent {
-  const clean = name.trim();
-  if (!clean) throw new Error("Agent name cannot be empty.");
-  const agents = readAgents(root);
-  const now = nowIso();
-  let agent = agents.find((a) => a.name === clean);
-  if (agent) {
-    agent.status = "active";
-    agent.lastSeen = now;
-    if (type) agent.type = type;
-  } else {
-    agent = {
-      name: clean,
-      type: type ?? inferAgentType(clean),
-      status: "active",
-      lastSeen: now,
-    };
-    agents.push(agent);
-  }
-  writeAgents(root, agents);
-  appendEvent(root, "agent_registered", {
-    actor: clean,
-    data: { name: clean, type: agent.type },
+  return withProjectLock(root, () => {
+    const clean = name.trim();
+    if (!clean) throw new Error("Agent name cannot be empty.");
+    const agents = readAgents(root);
+    const now = nowIso();
+    let agent = agents.find((a) => a.name === clean);
+    if (agent) {
+      agent.status = "active";
+      agent.lastSeen = now;
+      if (type) agent.type = type;
+    } else {
+      agent = {
+        name: clean,
+        type: type ?? inferAgentType(clean),
+        status: "active",
+        lastSeen: now,
+      };
+      agents.push(agent);
+    }
+    writeAgents(root, agents);
+    appendEvent(root, "agent_registered", {
+      actor: clean,
+      data: { name: clean, type: agent.type },
+    });
+    regenerate(root);
+    return agent;
   });
-  regenerate(root);
-  return agent;
 }
 
 /** Touch an agent's `lastSeen` (a lightweight heartbeat). No-op if unknown. */
 export function touchAgent(root: string, name: string): void {
-  const clean = name.trim();
-  if (!clean) return;
-  const agents = readAgents(root);
-  const agent = agents.find((a) => a.name === clean);
-  if (!agent) return;
-  agent.lastSeen = nowIso();
-  agent.status = "active";
-  writeAgents(root, agents);
-  appendEvent(root, "agent_seen", { actor: clean });
+  withProjectLock(root, () => {
+    const clean = name.trim();
+    if (!clean) return;
+    const agents = readAgents(root);
+    const agent = agents.find((a) => a.name === clean);
+    if (!agent) return;
+    agent.lastSeen = nowIso();
+    agent.status = "active";
+    writeAgents(root, agents);
+    appendEvent(root, "agent_seen", { actor: clean });
+  });
 }
 
 /** Compute a fresh {@link AgentStatus} from an agent's `lastSeen`. */

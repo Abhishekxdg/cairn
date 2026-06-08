@@ -94,9 +94,11 @@ export function doctor(root: string): DoctorReport {
     error((e as Error).message);
   }
 
-  // Derived files freshness.
-  if (!exists(paths.state)) warn("state.json missing — run `stated handoff`");
-  if (!exists(paths.handoff)) warn("handoff.md missing — run `stated handoff`");
+  // Derived caches are regenerated on read and should not be treated as truth.
+  if (!exists(paths.state))
+    ok("state.json cache missing (will regenerate on read)");
+  if (!exists(paths.handoff))
+    ok("handoff.md cache missing (will regenerate on read)");
 
   // Staleness — the rot detector. Flag any decaying fact that has gone stale so
   // a human/agent can re-verify it or let `stated decay` clean it up.

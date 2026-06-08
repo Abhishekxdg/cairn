@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { tempProject, cleanup } from "./helpers.js";
 
 import {
@@ -21,6 +22,7 @@ import {
   getTask,
   activeTasks,
   addDecision,
+  supersedeDecision,
   readDecisions,
   registerAgent,
   readAgents,
@@ -35,6 +37,7 @@ import {
   readEvents,
   detectFrameworks,
   searchProject,
+  syncProject,
   bm25Search,
   tokenize,
 } from "../src/core/index.js";
@@ -106,7 +109,9 @@ describe("goals", () => {
     const root = project();
     addGoal(root, "Launch beta");
     addGoal(root, "Launch beta");
-    expect(readGoals(root).active.filter((x) => x === "Launch beta")).toHaveLength(1);
+    expect(
+      readGoals(root).active.filter((x) => x === "Launch beta"),
+    ).toHaveLength(1);
   });
 
   it("throws when completing an unknown goal", () => {
@@ -160,7 +165,11 @@ describe("tasks", () => {
 describe("decisions", () => {
   it("records decisions immutably via events and renders markdown", () => {
     const root = project();
-    addDecision(root, { decision: "Use BullMQ", reason: "Reliable retries", madeBy: "Claude" });
+    addDecision(root, {
+      decision: "Use BullMQ",
+      reason: "Reliable retries",
+      madeBy: "Claude",
+    });
     addDecision(root, { decision: "Use PostgreSQL", madeBy: "Codex" });
 
     const ds = readDecisions(root);
@@ -170,6 +179,36 @@ describe("decisions", () => {
     const md = readFileSync(statedPaths(root).decisions, "utf8");
     expect(md).toContain("Use BullMQ");
     expect(md).toContain("Reliable retries");
+  });
+
+  it("supersedes older decisions while preserving history", () => {
+    const root = project();
+    const old = addDecision(root, { decision: "Use BullMQ", madeBy: "Claude" });
+    const replacement = addDecision(root, {
+      decision: "Use RabbitMQ",
+      madeBy: "Codex",
+      supersedes: old.id,
+    });
+
+    const ds = readDecisions(root);
+    expect(ds.find((d) => d.id === old.id)?.status).toBe("superseded");
+    expect(ds.find((d) => d.id === old.id)?.supersededBy).toBe(replacement.id);
+    expect(buildState(root).recentDecisions.map((d) => d.id)).not.toContain(
+      old.id,
+    );
+
+    const md = readFileSync(statedPaths(root).decisions, "utf8");
+    expect(md).toContain(`superseded by ${replacement.id}`);
+  });
+
+  it("can supersede decisions explicitly", () => {
+    const root = project();
+    const old = addDecision(root, { decision: "Use REST" });
+    const replacement = addDecision(root, { decision: "Use GraphQL" });
+    supersedeDecision(root, old.id, replacement.id, "Architect");
+    expect(readDecisions(root).find((d) => d.id === old.id)?.status).toBe(
+      "superseded",
+    );
   });
 });
 
@@ -236,6 +275,13 @@ describe("snapshot engine", () => {
     expect(handoff).toContain("Next Recommended Steps");
   });
 
+  it("marks derived state and handoff files as gitignored caches", () => {
+    const root = project();
+    const gitignore = readFileSync(statedPaths(root).gitignore, "utf8");
+    expect(gitignore).toContain("state.json");
+    expect(gitignore).toContain("handoff.md");
+  });
+
   it("creates a self-describing snapshot directory", () => {
     const root = project();
     addTask(root, { title: "X" });
@@ -249,7 +295,33 @@ describe("snapshot engine", () => {
     const root = project();
     const text = generateHandoff(root);
     expect(text).toContain("# Project Handoff");
-    expect(readEvents(root).some((e) => e.type === "handoff_generated")).toBe(true);
+    expect(readEvents(root).some((e) => e.type === "handoff_generated")).toBe(
+      true,
+    );
+  });
+});
+
+describe("sync", () => {
+  it("proposes review for active work when git worktree is clean", () => {
+    const root = project();
+    const t = addTask(root, { title: "Finish OAuth" });
+    startTask(root, t.id, "Claude");
+
+    const report = syncProject(root, { actor: "Codex" });
+    expect(
+      report.suggestions.some(
+        (s) => s.kind === "review_task" && s.target === t.id,
+      ),
+    ).toBe(true);
+    expect(readEvents(root).some((e) => e.type === "sync_ran")).toBe(true);
+  });
+
+  it("reports dirty files from git status", () => {
+    const root = project();
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    writeFileSync(join(root, "dirty.txt"), "x");
+    const report = syncProject(root);
+    expect(report.dirtyFiles).toContain("dirty.txt");
   });
 });
 
@@ -262,11 +334,16 @@ describe("framework detection", () => {
     });
     dirs.push(root);
     init(root);
-    expect(detectFrameworks(root)).toEqual(expect.arrayContaining(["Next.js", "React"]));
+    expect(detectFrameworks(root)).toEqual(
+      expect.arrayContaining(["Next.js", "React"]),
+    );
   });
 
   it("detects Django from manage.py", () => {
-    const root = tempProject({ "manage.py": "# django", "requirements.txt": "Django==5.0" });
+    const root = tempProject({
+      "manage.py": "# django",
+      "requirements.txt": "Django==5.0",
+    });
     dirs.push(root);
     init(root);
     expect(detectFrameworks(root)).toContain("Django");
@@ -297,7 +374,10 @@ describe("search (BM25)", () => {
 
   it("ranks the most relevant task first", () => {
     const root = project();
-    addTask(root, { title: "Build OAuth login flow", description: "Google and GitHub" });
+    addTask(root, {
+      title: "Build OAuth login flow",
+      description: "Google and GitHub",
+    });
     addTask(root, { title: "Write database migrations" });
     addTask(root, { title: "Refactor billing module" });
     const hits = searchProject(root, "oauth login");
@@ -308,7 +388,10 @@ describe("search (BM25)", () => {
 
   it("searches across decisions and goals too", () => {
     const root = project();
-    addDecision(root, { decision: "Use BullMQ for job queues", reason: "Reliable retries" });
+    addDecision(root, {
+      decision: "Use BullMQ for job queues",
+      reason: "Reliable retries",
+    });
     addGoal(root, "Launch the payments service");
     expect(searchProject(root, "bullmq")[0]?.type).toBe("decision");
     expect(searchProject(root, "payments")[0]?.type).toBe("goal");

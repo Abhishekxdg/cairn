@@ -1,6 +1,13 @@
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import type { Task, StatedEvent } from "./types.js";
-import { ensureDir, writeJson, writeText, appendLine } from "./io.js";
+import {
+  ensureDir,
+  writeJson,
+  writeText,
+  appendLine,
+  withProjectLock,
+} from "./io.js";
 import { statedPaths } from "./paths.js";
 import { nowIso } from "./ids.js";
 import { loadConfig, type StatedConfig } from "./config.js";
@@ -47,6 +54,12 @@ function writeEvents(path: string, events: StatedEvent[]): void {
   writeText(path, body ? body + "\n" : "");
 }
 
+function hashEvents(events: StatedEvent[]): string {
+  const hash = createHash("sha256");
+  for (const ev of events) hash.update(JSON.stringify(ev) + "\n");
+  return hash.digest("hex");
+}
+
 /**
  * Compute (and optionally apply) the decay actions for a project.
  *
@@ -57,93 +70,108 @@ export function applyDecay(
   root: string,
   opts: { apply?: boolean; now?: number; config?: StatedConfig } = {},
 ): DecayReport {
-  const apply = opts.apply ?? false;
-  const now = opts.now ?? Date.now();
-  const config = opts.config ?? loadConfig(root);
-  const policy = config.decay;
-  const paths = statedPaths(root);
+  return withProjectLock(root, () => {
+    const apply = opts.apply ?? false;
+    const now = opts.now ?? Date.now();
+    const config = opts.config ?? loadConfig(root);
+    const policy = config.decay;
+    const paths = statedPaths(root);
 
-  const actions: DecayAction[] = [];
-  let archiveDir: string | null = null;
-  const ensureArchive = (): string => {
-    if (!archiveDir) {
-      archiveDir = join(
-        paths.snapshots,
-        `archive-${nowIso().replace(/[:.]/g, "-")}`,
-      );
-      ensureDir(archiveDir);
+    const actions: DecayAction[] = [];
+    let archiveDir: string | null = null;
+    const ensureArchive = (): string => {
+      if (!archiveDir) {
+        archiveDir = join(
+          paths.snapshots,
+          `archive-${nowIso().replace(/[:.]/g, "-")}`,
+        );
+        ensureDir(archiveDir);
+      }
+      return archiveDir;
+    };
+
+    // --- 1. Auto-release abandoned locks --------------------------------------
+    if (policy.lockAutoReleaseHours > 0) {
+      const cutoff = policy.lockAutoReleaseHours * HOUR_MS;
+      const files = readFiles(root);
+      const kept = files.filter((f) => {
+        if (!f.locked) return true;
+        const age = ageMsOf(fileVerifiedAt(f), now);
+        if (age < cutoff) return true;
+        actions.push({
+          kind: "release_lock",
+          target: f.path,
+          detail: `lock by ${f.owner} idle ${Math.floor(age / HOUR_MS)}h ≥ ${policy.lockAutoReleaseHours}h`,
+        });
+        return false;
+      });
+      if (apply && kept.length !== files.length) writeFiles(root, kept);
     }
-    return archiveDir;
-  };
 
-  // --- 1. Auto-release abandoned locks --------------------------------------
-  if (policy.lockAutoReleaseHours > 0) {
-    const cutoff = policy.lockAutoReleaseHours * HOUR_MS;
-    const files = readFiles(root);
-    const kept = files.filter((f) => {
-      if (!f.locked) return true;
-      const age = ageMsOf(fileVerifiedAt(f), now);
-      if (age < cutoff) return true;
-      actions.push({
-        kind: "release_lock",
-        target: f.path,
-        detail: `lock by ${f.owner} idle ${Math.floor(age / HOUR_MS)}h ≥ ${policy.lockAutoReleaseHours}h`,
+    // --- 2. Archive long-completed tasks --------------------------------------
+    if (policy.completedTaskArchiveDays > 0) {
+      const cutoff = policy.completedTaskArchiveDays * DAY_MS;
+      const tasks = readTasks(root);
+      const toArchive: Task[] = [];
+      const kept = tasks.filter((t) => {
+        if (t.status !== "completed") return true;
+        const age = ageMsOf(t.updatedAt, now);
+        if (age < cutoff) return true;
+        toArchive.push(t);
+        actions.push({
+          kind: "archive_task",
+          target: t.id,
+          detail: `completed ${Math.floor(age / DAY_MS)}d ago ≥ ${policy.completedTaskArchiveDays}d`,
+        });
+        return false;
       });
-      return false;
-    });
-    if (apply && kept.length !== files.length) writeFiles(root, kept);
-  }
-
-  // --- 2. Archive long-completed tasks --------------------------------------
-  if (policy.completedTaskArchiveDays > 0) {
-    const cutoff = policy.completedTaskArchiveDays * DAY_MS;
-    const tasks = readTasks(root);
-    const toArchive: Task[] = [];
-    const kept = tasks.filter((t) => {
-      if (t.status !== "completed") return true;
-      const age = ageMsOf(t.updatedAt, now);
-      if (age < cutoff) return true;
-      toArchive.push(t);
-      actions.push({
-        kind: "archive_task",
-        target: t.id,
-        detail: `completed ${Math.floor(age / DAY_MS)}d ago ≥ ${policy.completedTaskArchiveDays}d`,
-      });
-      return false;
-    });
-    if (apply && toArchive.length) {
-      const dir = ensureArchive();
-      writeJson(join(dir, "tasks.json"), { tasks: toArchive });
-      writeTasks(root, kept);
-    }
-  }
-
-  // --- 3. Trim the event log ------------------------------------------------
-  if (policy.eventRetention > 0) {
-    const events = readEvents(root);
-    if (events.length > policy.eventRetention) {
-      const drop = events.length - policy.eventRetention;
-      actions.push({
-        kind: "trim_events",
-        target: "events",
-        detail: `archive ${drop} of ${events.length} events, keep newest ${policy.eventRetention}`,
-      });
-      if (apply) {
+      if (apply && toArchive.length) {
         const dir = ensureArchive();
-        for (const ev of events.slice(0, drop)) {
-          appendLine(join(dir, "events.jsonl"), JSON.stringify(ev));
-        }
-        writeEvents(paths.events, events.slice(drop));
+        writeJson(join(dir, "tasks.json"), { tasks: toArchive });
+        writeTasks(root, kept);
       }
     }
-  }
 
-  if (apply && actions.length) {
-    appendEvent(root, "memory_decayed", {
-      data: { actions: actions.length, archiveDir },
-    });
-    regenerate(root);
-  }
+    // --- 3. Trim the event log ------------------------------------------------
+    if (policy.eventRetention > 0) {
+      const events = readEvents(root);
+      if (events.length > policy.eventRetention) {
+        const drop = events.length - policy.eventRetention;
+        actions.push({
+          kind: "trim_events",
+          target: "events",
+          detail: `archive ${drop} of ${events.length} events, keep newest ${policy.eventRetention}`,
+        });
+        if (apply) {
+          const dir = ensureArchive();
+          const archived = events.slice(0, drop);
+          const retained = events.slice(drop);
+          for (const ev of events.slice(0, drop)) {
+            appendLine(join(dir, "events.jsonl"), JSON.stringify(ev));
+          }
+          writeJson(join(dir, "manifest.json"), {
+            kind: "event-archive",
+            createdAt: nowIso(),
+            totalEvents: events.length,
+            archivedEvents: archived.length,
+            retainedEvents: retained.length,
+            firstArchivedAt: archived[0]?.at ?? null,
+            lastArchivedAt: archived[archived.length - 1]?.at ?? null,
+            archivedSha256: hashEvents(archived),
+            retainedSha256: hashEvents(retained),
+          });
+          writeEvents(paths.events, retained);
+        }
+      }
+    }
 
-  return { applied: apply, actions, archiveDir };
+    if (apply && actions.length) {
+      appendEvent(root, "memory_decayed", {
+        data: { actions: actions.length, archiveDir },
+      });
+      regenerate(root);
+    }
+
+    return { applied: apply, actions, archiveDir };
+  });
 }

@@ -6,11 +6,14 @@ import {
   openSync,
   readFileSync,
   renameSync,
+  rmSync,
+  statSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { statedPaths } from "./paths.js";
 
 /**
  * Low-level, synchronous, Git-friendly file IO.
@@ -117,3 +120,59 @@ export function syncDir(path: string): void {
 
 /** Re-export for callers that want a quick existence check on a written file. */
 export { writeFileSync };
+
+const HELD_LOCKS = new Set<string>();
+const STALE_LOCK_MS = 2 * 60 * 1000;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Serialize read-modify-write project mutations across local processes.
+ *
+ * Atomic writes prevent torn files; this lock prevents lost updates when two
+ * agents mutate the same `.stated/` JSON files at once. Re-entrant in-process
+ * so a high-level mutation can call helpers that also use the lock.
+ */
+export function withProjectLock<T>(root: string, fn: () => T): T {
+  const lockDir = join(statedPaths(root).root, ".stated.lock");
+  if (HELD_LOCKS.has(lockDir)) return fn();
+
+  ensureDir(dirname(lockDir));
+  const deadline = Date.now() + 5_000;
+  while (true) {
+    try {
+      mkdirSync(lockDir);
+      break;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EEXIST") {
+        try {
+          const age = Date.now() - statSync(lockDir).mtimeMs;
+          if (age > STALE_LOCK_MS) {
+            rmSync(lockDir, { recursive: true, force: true });
+            continue;
+          }
+        } catch {
+          continue;
+        }
+      }
+      if (code !== "EEXIST" || Date.now() >= deadline) {
+        throw new Error(
+          `Could not acquire Stated project lock at ${lockDir}. ` +
+            "Another process may be mutating state.",
+        );
+      }
+      sleepSync(25);
+    }
+  }
+
+  HELD_LOCKS.add(lockDir);
+  try {
+    return fn();
+  } finally {
+    HELD_LOCKS.delete(lockDir);
+    rmSync(lockDir, { recursive: true, force: true });
+  }
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempProject, cleanup } from "./helpers.js";
 
@@ -55,7 +55,10 @@ describe("config", () => {
   it("deep-merges a partial config over the defaults", () => {
     const root = project();
     writeConfig(root, {
-      staleness: { task: { agingHours: 1, staleHours: 2 }, lock: DEFAULT_CONFIG.staleness.lock },
+      staleness: {
+        task: { agingHours: 1, staleHours: 2 },
+        lock: DEFAULT_CONFIG.staleness.lock,
+      },
       decay: { ...DEFAULT_CONFIG.decay, eventRetention: 100 },
     });
     const cfg = loadConfig(root);
@@ -99,8 +102,12 @@ describe("staleness derivation", () => {
     const root = project();
     const rec = claimFile(root, "src/auth.ts", "Claude");
     const base = Date.parse(rec.claimedAt);
-    expect(viewFile(rec, base + 5 * HOUR, DEFAULT_CONFIG).confidence).toBe("aging");
-    expect(viewFile(rec, base + 25 * HOUR, DEFAULT_CONFIG).confidence).toBe("stale");
+    expect(viewFile(rec, base + 5 * HOUR, DEFAULT_CONFIG).confidence).toBe(
+      "aging",
+    );
+    expect(viewFile(rec, base + 25 * HOUR, DEFAULT_CONFIG).confidence).toBe(
+      "stale",
+    );
   });
 
   it("summarize rolls up to the worst confidence", () => {
@@ -133,7 +140,9 @@ describe("verify resets the staleness clock", () => {
     expect(verified.lastVerifiedAt! > before).toBe(true);
     // Content is unchanged.
     expect(getTask(root, task.id)!.title).toBe("Build OAuth");
-    expect(readEvents(root).some((e) => e.type === "memory_verified")).toBe(true);
+    expect(readEvents(root).some((e) => e.type === "memory_verified")).toBe(
+      true,
+    );
   });
 
   it("verifyFile refreshes a lock's lastVerifiedAt", async () => {
@@ -160,7 +169,10 @@ describe("decay", () => {
   it("is a no-op when every policy is disabled (all zero)", () => {
     const root = project();
     claimFile(root, "src/a.ts", "Claude");
-    const report = applyDecay(root, { apply: true, now: Date.now() + 999 * DAY });
+    const report = applyDecay(root, {
+      apply: true,
+      now: Date.now() + 999 * DAY,
+    });
     expect(report.actions).toEqual([]);
     expect(report.applied).toBe(true);
   });
@@ -185,9 +197,15 @@ describe("decay", () => {
     const root = project();
     const rec = claimFile(root, "src/a.ts", "Claude");
     const now = Date.parse(rec.claimedAt) + 50 * HOUR;
-    applyDecay(root, { apply: true, now, config: config({ lockAutoReleaseHours: 24 }) });
+    applyDecay(root, {
+      apply: true,
+      now,
+      config: config({ lockAutoReleaseHours: 24 }),
+    });
     expect(fileOwner(root, "src/a.ts")).toBeUndefined();
-    expect(readEvents(root).some((e) => e.type === "memory_decayed")).toBe(true);
+    expect(readEvents(root).some((e) => e.type === "memory_decayed")).toBe(
+      true,
+    );
   });
 
   it("apply archives long-completed tasks into a snapshot dir", () => {
@@ -202,7 +220,9 @@ describe("decay", () => {
     });
     expect(report.actions.some((a) => a.kind === "archive_task")).toBe(true);
     expect(getTask(root, t.id)).toBeUndefined();
-    expect(report.archiveDir && existsSync(join(report.archiveDir, "tasks.json"))).toBe(true);
+    expect(
+      report.archiveDir && existsSync(join(report.archiveDir, "tasks.json")),
+    ).toBe(true);
   });
 
   it("apply trims the event log to the retention window", () => {
@@ -210,8 +230,19 @@ describe("decay", () => {
     for (let i = 0; i < 8; i++) addTask(root, { title: `task ${i}` });
     const total = readEvents(root).length;
     expect(total).toBeGreaterThan(5);
-    const report = applyDecay(root, { apply: true, config: config({ eventRetention: 5 }) });
+    const report = applyDecay(root, {
+      apply: true,
+      config: config({ eventRetention: 5 }),
+    });
     expect(report.actions.some((a) => a.kind === "trim_events")).toBe(true);
+    expect(
+      report.archiveDir && existsSync(join(report.archiveDir, "manifest.json")),
+    ).toBe(true);
+    const manifest = JSON.parse(
+      readFileSync(join(report.archiveDir!, "manifest.json"), "utf8"),
+    ) as { archivedSha256?: string; retainedSha256?: string };
+    expect(manifest.archivedSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(manifest.retainedSha256).toMatch(/^[a-f0-9]{64}$/);
     // memory_decayed is appended after the trim, so newest 5 + 1.
     expect(readEvents(root).length).toBeLessThanOrEqual(6);
   });

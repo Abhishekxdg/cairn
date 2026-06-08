@@ -1,5 +1,5 @@
 import type { ProjectInfo } from "./types.js";
-import { readText, writeText } from "./io.js";
+import { readText, writeText, withProjectLock } from "./io.js";
 import { statedPaths } from "./paths.js";
 import { fieldValue } from "./markdown.js";
 
@@ -32,5 +32,7 @@ export function renderProject(info: ProjectInfo): string {
 
 /** Persist a {@link ProjectInfo} to `.stated/project.md`. */
 export function writeProject(root: string, info: ProjectInfo): void {
-  writeText(statedPaths(root).project, renderProject(info));
+  withProjectLock(root, () => {
+    writeText(statedPaths(root).project, renderProject(info));
+  });
 }

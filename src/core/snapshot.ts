@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { State, Task, TaskView, FileView } from "./types.js";
-import { ensureDir, writeJson, writeText } from "./io.js";
+import { ensureDir, writeJson, writeText, withProjectLock } from "./io.js";
 import { statedPaths } from "./paths.js";
 import { nowIso } from "./ids.js";
 import { readProject } from "./project.js";
@@ -69,7 +69,9 @@ export function buildState(root: string, nowMs = Date.now()): State {
   const files: FileView[] = lockedFiles(root).map((f) =>
     viewFile(f, nowMs, config),
   );
-  const decisions = readDecisions(root).slice(0, 5);
+  const decisions = readDecisions(root)
+    .filter((d) => d.status === "active")
+    .slice(0, 5);
   const agents = readAgents(root)
     .map((a) => ({ ...a, status: liveStatus(a, nowMs) }))
     .filter((a) => a.status === "active");
@@ -112,7 +114,8 @@ export function nextSteps(state: State): string[] {
     steps.push(`Pick up: ${t.title} (${t.id})`);
   }
   if (steps.length === 0) {
-    if (state.goal) steps.push(`Break down the goal "${state.goal}" into tasks`);
+    if (state.goal)
+      steps.push(`Break down the goal "${state.goal}" into tasks`);
     else steps.push("Define a goal with `stated goal add` and add tasks");
   }
   return steps.slice(0, 7);
@@ -150,7 +153,9 @@ export function renderHandoff(state: State): string {
   const inProgress = state.activeTasks.find((t) => t.status === "active");
   lines.push(
     "Current Work:",
-    inProgress ? `${inProgress.title} (${inProgress.id})` : "(nothing in progress)",
+    inProgress
+      ? `${inProgress.title} (${inProgress.id})`
+      : "(nothing in progress)",
     "",
   );
 
@@ -215,7 +220,12 @@ export function renderHandoff(state: State): string {
   nextSteps(state).forEach((s, i) => lines.push(`${i + 1}. ${s}`));
   lines.push("");
 
-  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+  return (
+    lines
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trimEnd() + "\n"
+  );
 }
 
 /**
@@ -235,9 +245,11 @@ export function regenerate(root: string): State {
 
 /** Read the latest `handoff.md` text, regenerating it first for freshness. */
 export function generateHandoff(root: string): string {
-  const state = regenerate(root);
-  appendEvent(root, "handoff_generated");
-  return renderHandoff(state);
+  return withProjectLock(root, () => {
+    const state = regenerate(root);
+    appendEvent(root, "handoff_generated");
+    return renderHandoff(state);
+  });
 }
 
 /**
@@ -246,18 +258,20 @@ export function generateHandoff(root: string): string {
  * operation.
  */
 export function createSnapshot(root: string): string {
-  const paths = statedPaths(root);
-  const stamp = nowIso().replace(/[:.]/g, "-");
-  const dir = join(paths.snapshots, stamp);
-  ensureDir(dir);
+  return withProjectLock(root, () => {
+    const paths = statedPaths(root);
+    const stamp = nowIso().replace(/[:.]/g, "-");
+    const dir = join(paths.snapshots, stamp);
+    ensureDir(dir);
 
-  const state = regenerate(root);
-  // Persist the materialized state plus a copy of the live task board so a
-  // snapshot is fully self-describing.
-  writeJson(join(dir, "state.json"), state);
-  writeText(join(dir, "handoff.md"), renderHandoff(state));
-  writeJson(join(dir, "tasks.json"), { tasks: readTasks(root) });
+    const state = regenerate(root);
+    // Persist the materialized state plus a copy of the live task board so a
+    // snapshot is fully self-describing.
+    writeJson(join(dir, "state.json"), state);
+    writeText(join(dir, "handoff.md"), renderHandoff(state));
+    writeJson(join(dir, "tasks.json"), { tasks: readTasks(root) });
 
-  appendEvent(root, "snapshot_created", { data: { dir: stamp } });
-  return dir;
+    appendEvent(root, "snapshot_created", { data: { dir: stamp } });
+    return dir;
+  });
 }

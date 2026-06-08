@@ -107,15 +107,15 @@ Stated is three things over one on-disk format:
 ├── decisions.md    # rendered decision log (from the event stream)
 ├── agents.json     # registered agents + heartbeats
 ├── files.json      # file ownership / soft locks
-├── handoff.md      # ⭐ generated handoff — the most important file
-├── state.json      # compact machine state for fast agent loading
+├── handoff.md      # generated cache (gitignored by default)
+├── state.json      # generated cache (gitignored by default)
 ├── events.jsonl    # append-only event history
 └── snapshots/      # timestamped restore points
 ```
 
 `handoff.md` and `state.json` are **derived** — Stated regenerates them
 automatically after every task creation, task completion, decision, file claim
-or goal change. You never edit them by hand.
+or goal change. They are caches, gitignored by default, and safe to regenerate.
 
 ---
 
@@ -139,7 +139,7 @@ stated task start <id>            Mark a task active
 stated task complete <id>         Mark a task completed
 stated task block <id>            Mark a task blocked (--reason <text>)
 
-stated decision add <text>        Record a decision (--reason, --by)
+stated decision add <text>        Record a decision (--reason, --by, --supersedes)
 
 stated agent register <name>      Register / heartbeat an agent
 stated agent list                 List agents
@@ -149,6 +149,7 @@ stated file release <path>        Release a file
 stated file list                  List file ownership
 
 stated verify <id|path>           Re-confirm a task/lock is still true (resets decay)
+stated sync                       Reconcile Stated claims with git (proposes only)
 stated decay [--apply]            Run memory-decay policy (dry run unless --apply)
 
 stated snapshot                   Write a restore point to .stated/snapshots/
@@ -184,18 +185,21 @@ import { Stated } from "stated";
 // `agent` attributes every mutation and refreshes the agent's heartbeat.
 const stated = new Stated({ agent: "Claude Code" });
 
-await stated.init();                 // create .stated/ if missing
-await stated.registerAgent();        // announce yourself
+await stated.init(); // create .stated/ if missing
+await stated.registerAgent(); // announce yourself
 
 await stated.addGoal("Launch MailMeld");
 const task = await stated.addTask({ title: "Build OAuth", priority: "high" });
-await stated.claimTask(task.id);     // owner defaults to the configured agent
+await stated.claimTask(task.id); // owner defaults to the configured agent
 
-await stated.addDecision({ decision: "Use BullMQ", reason: "Reliable retries" });
+await stated.addDecision({
+  decision: "Use BullMQ",
+  reason: "Reliable retries",
+});
 await stated.claimFile("src/auth.ts");
 
-const state = await stated.getState();       // compact machine state
-const handoff = await stated.getHandoff();   // full handoff document
+const state = await stated.getState(); // compact machine state
+const handoff = await stated.getHandoff(); // full handoff document
 
 await stated.completeTask(task.id);
 await stated.releaseFile("src/auth.ts");
@@ -303,7 +307,7 @@ up, enable a decay policy in `.stated/config.json`. Everything defaults to `0`
 {
   "staleness": {
     "task": { "agingHours": 24, "staleHours": 168 },
-    "lock": { "agingHours": 4,  "staleHours": 24 }
+    "lock": { "agingHours": 4, "staleHours": 24 }
   },
   "decay": {
     "lockAutoReleaseHours": 0,
@@ -339,12 +343,12 @@ match the cadence of your project.
 Measured warm on a laptop SSD (`buildState`/handoff are pure derivation; mutations
 are durably `fsync`-flushed and auto-regenerate the snapshot):
 
-| Operation             | Target   | Typical |
-| --------------------- | -------- | ------- |
-| `stated init`         | < 100 ms | ~16 ms  |
-| State load (`getState`) | < 5 ms | ~0.3 ms |
-| Handoff generation    | < 50 ms  | ~15 ms  |
-| Task claim (durable, auto-snapshot) | < 5 ms* | ~19 ms |
+| Operation                           | Target   | Typical |
+| ----------------------------------- | -------- | ------- |
+| `stated init`                       | < 100 ms | ~16 ms  |
+| State load (`getState`)             | < 5 ms   | ~0.3 ms |
+| Handoff generation                  | < 50 ms  | ~15 ms  |
+| Task claim (durable, auto-snapshot) | < 5 ms\* | ~19 ms  |
 
 \* The in-memory claim itself is sub-millisecond; the durable write path
 (`fsync` + automatic `handoff.md` / `state.json` regeneration) dominates. Set

@@ -91,7 +91,10 @@ export type Confidence = "fresh" | "aging" | "stale";
 
 /** A decaying fact with its derived confidence + age, used in rendered state. */
 export type TaskView = Task & { confidence: Confidence; ageMs: number };
-export type FileView = FileOwnership & { confidence: Confidence; ageMs: number };
+export type FileView = FileOwnership & {
+  confidence: Confidence;
+  ageMs: number;
+};
 
 /** Aggregate freshness of the whole project, shown as a handoff banner. */
 export interface Freshness {
@@ -104,6 +107,10 @@ export interface Freshness {
 /** A project decision. Canonical source is the `decision_added` event stream. */
 export interface Decision {
   id: string;
+  /** Whether this decision is current or kept only as history. */
+  status: "active" | "superseded";
+  /** Decision id that replaced this one, when superseded. */
+  supersededBy?: string;
   /** Calendar date (YYYY-MM-DD) the decision was made. */
   date: string;
   decision: string;
@@ -177,10 +184,12 @@ export type EventType =
   | "task_completed"
   | "task_updated"
   | "decision_added"
+  | "decision_superseded"
   | "file_claimed"
   | "file_released"
   | "memory_verified"
   | "memory_decayed"
+  | "sync_ran"
   | "handoff_generated"
   | "snapshot_created";
 
@@ -210,6 +219,21 @@ export interface SearchHit {
   /** A short excerpt around the first query-term match. */
   snippet: string;
   meta: Record<string, unknown>;
+}
+
+/** One proposed correction from git reconciliation. */
+export interface SyncSuggestion {
+  kind: "release_lock" | "review_task";
+  target: string;
+  reason: string;
+}
+
+/** Read-only reconciliation between `.stated/` claims and git reality. */
+export interface SyncReport {
+  ok: boolean;
+  branch: string;
+  dirtyFiles: string[];
+  suggestions: SyncSuggestion[];
 }
 
 /** A single append-only event record. */

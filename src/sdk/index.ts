@@ -7,6 +7,7 @@ import type {
   ProjectInfo,
   State,
   StatedEvent,
+  SyncReport,
   Task,
   TaskPriority,
 } from "../core/index.js";
@@ -44,6 +45,7 @@ import {
   verifyFile as coreVerifyFile,
   fileOwner,
   applyDecay,
+  syncProject,
   loadConfig,
   type StatedConfig,
   type DecayReport,
@@ -209,7 +211,8 @@ export class Stated {
   /** Register an agent. Defaults to the SDK's configured agent identity. */
   async registerAgent(name?: string, type?: AgentType): Promise<Agent> {
     const who = name ?? this.agent;
-    if (!who) throw new Error("registerAgent requires a name or a configured agent.");
+    if (!who)
+      throw new Error("registerAgent requires a name or a configured agent.");
     return coreRegisterAgent(this.root, who, type);
   }
 
@@ -230,7 +233,9 @@ export class Stated {
       typeof input === "string" ? { title: input } : { ...input };
     // The configured run scope applies unless the call overrides it.
     const normalized: AddTaskInput =
-      this.run && base.runId === undefined ? { ...base, runId: this.run } : base;
+      this.run && base.runId === undefined
+        ? { ...base, runId: this.run }
+        : base;
     return coreAddTask(this.root, normalized, this.agent);
   }
 
@@ -241,7 +246,8 @@ export class Stated {
     opts: { force?: boolean } = {},
   ): Promise<Task> {
     const who = owner ?? this.agent;
-    if (!who) throw new Error("claimTask requires an owner or a configured agent.");
+    if (!who)
+      throw new Error("claimTask requires an owner or a configured agent.");
     this.touch();
     return coreClaimTask(this.root, id, who, opts);
   }
@@ -278,7 +284,9 @@ export class Stated {
     const base: AddDecisionInput =
       typeof input === "string" ? { decision: input } : { ...input };
     const normalized: AddDecisionInput =
-      this.run && base.runId === undefined ? { ...base, runId: this.run } : base;
+      this.run && base.runId === undefined
+        ? { ...base, runId: this.run }
+        : base;
     return coreAddDecision(this.root, normalized, this.agent);
   }
 
@@ -295,7 +303,8 @@ export class Stated {
     opts: { lock?: boolean; force?: boolean } = {},
   ): Promise<FileOwnership> {
     const who = owner ?? this.agent;
-    if (!who) throw new Error("claimFile requires an owner or a configured agent.");
+    if (!who)
+      throw new Error("claimFile requires an owner or a configured agent.");
     this.touch();
     return coreClaimFile(this.root, path, who, opts);
   }
@@ -349,6 +358,13 @@ export class Stated {
     return applyDecay(this.root, opts);
   }
 
+  /** Reconcile claims against git reality. Proposes corrections only. */
+  async sync(): Promise<SyncReport> {
+    return syncProject(this.root, {
+      ...(this.agent ? { actor: this.agent } : {}),
+    });
+  }
+
   // --- Search ----------------------------------------------------------------
 
   /**
@@ -373,6 +389,4 @@ export function createStated(options?: StatedOptions): Stated {
   return new Stated(options);
 }
 
-export type {
-  StatedOptions as StatedSdkOptions,
-};
+export type { StatedOptions as StatedSdkOptions };

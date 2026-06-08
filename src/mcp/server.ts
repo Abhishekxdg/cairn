@@ -23,6 +23,7 @@ import {
   getTask,
   fileOwner,
   applyDecay,
+  syncProject,
   readTasks,
   readAgents,
   searchProject,
@@ -79,14 +80,21 @@ export function createServer(): McpServer {
     "Initialize a .stated/ shared-state directory in the current project. " +
       "Safe to call if already initialized (returns the existing root unless force).",
     {
-      name: z.string().optional().describe("Project name (defaults to dir name)"),
+      name: z
+        .string()
+        .optional()
+        .describe("Project name (defaults to dir name)"),
       description: z.string().optional().describe("Short project description"),
       force: z.boolean().optional().describe("Reinitialize scaffolding"),
     },
     async ({ name, description, force }) => {
       const cwd = process.env["STATED_ROOT"] ?? process.cwd();
       if (isInitialized(cwd) && !force) {
-        return json({ ok: true, root: findProjectRoot(cwd), alreadyInitialized: true });
+        return json({
+          ok: true,
+          root: findProjectRoot(cwd),
+          alreadyInitialized: true,
+        });
       }
       const res = init(cwd, {
         ...(name ? { name } : {}),
@@ -143,8 +151,16 @@ export function createServer(): McpServer {
         .enum(["task", "decision", "goal"])
         .optional()
         .describe("Restrict results to one document type"),
-      limit: z.number().int().positive().optional().describe("Max hits (default 10)"),
-      run_id: z.string().optional().describe("Restrict results to one session/run scope"),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Max hits (default 10)"),
+      run_id: z
+        .string()
+        .optional()
+        .describe("Restrict results to one session/run scope"),
     },
     async ({ query, type, limit, run_id }) =>
       json(
@@ -241,10 +257,17 @@ export function createServer(): McpServer {
       decision: z.string().describe("The decision, e.g. 'Use BullMQ'"),
       reason: z.string().optional().describe("Why, e.g. 'Reliable retries'"),
       madeBy: z.string().optional().describe("Who made the decision"),
-      run_id: z.string().optional().describe("Session/run scope for this decision"),
+      supersedes: z
+        .string()
+        .optional()
+        .describe("Existing decision id replaced by this decision"),
+      run_id: z
+        .string()
+        .optional()
+        .describe("Session/run scope for this decision"),
       actor: z.string().optional().describe("Acting agent name"),
     },
-    async ({ decision, reason, madeBy, run_id, actor }) =>
+    async ({ decision, reason, madeBy, supersedes, run_id, actor }) =>
       json(
         addDecision(
           resolveRoot(),
@@ -252,6 +275,7 @@ export function createServer(): McpServer {
             decision,
             ...(reason ? { reason } : {}),
             ...(madeBy ? { madeBy } : {}),
+            ...(supersedes ? { supersedes } : {}),
             ...(run_id ? { runId: run_id } : {}),
           },
           actor,
@@ -267,7 +291,10 @@ export function createServer(): McpServer {
     {
       path: z.string().describe("Repo-relative file path"),
       owner: z.string().describe("Agent claiming the file"),
-      lock: z.boolean().optional().describe("Whether to hard-lock (default true)"),
+      lock: z
+        .boolean()
+        .optional()
+        .describe("Whether to hard-lock (default true)"),
       force: z.boolean().optional().describe("Override an existing lock"),
     },
     async ({ path, owner, lock, force }) =>
@@ -310,12 +337,23 @@ export function createServer(): McpServer {
     async ({ idOrPath, actor }) => {
       const root = resolveRoot();
       if (getTask(root, idOrPath)) {
-        return json({ ok: true, kind: "task", fact: verifyTask(root, idOrPath, actor) });
+        return json({
+          ok: true,
+          kind: "task",
+          fact: verifyTask(root, idOrPath, actor),
+        });
       }
       if (fileOwner(root, idOrPath)) {
-        return json({ ok: true, kind: "file", fact: verifyFile(root, idOrPath, actor) });
+        return json({
+          ok: true,
+          kind: "file",
+          fact: verifyFile(root, idOrPath, actor),
+        });
       }
-      return json({ ok: false, error: `No task or file claim matching "${idOrPath}".` });
+      return json({
+        ok: false,
+        error: `No task or file claim matching "${idOrPath}".`,
+      });
     },
   );
 
@@ -332,7 +370,20 @@ export function createServer(): McpServer {
         .optional()
         .describe("Perform the actions (default false = dry run)"),
     },
-    async ({ apply }) => json(applyDecay(resolveRoot(), { apply: Boolean(apply) })),
+    async ({ apply }) =>
+      json(applyDecay(resolveRoot(), { apply: Boolean(apply) })),
+  );
+
+  // --- sync_project ----------------------------------------------------------
+  server.tool(
+    "sync_project",
+    "Reconcile Stated claims against git reality. Returns suggestions only; " +
+      "does not auto-complete tasks or release locks.",
+    {
+      actor: z.string().optional().describe("Acting agent name"),
+    },
+    async ({ actor }) =>
+      json(syncProject(resolveRoot(), { ...(actor ? { actor } : {}) })),
   );
 
   // --- snapshot --------------------------------------------------------------

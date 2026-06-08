@@ -27,6 +27,7 @@ import {
   getTask,
   fileOwner,
   applyDecay,
+  syncProject,
   ageLabel,
   type Confidence,
   searchProject,
@@ -45,8 +46,7 @@ const VERSION = "0.1.0";
 
 // --- Tiny ANSI styling (no dependencies) -------------------------------------
 
-const useColor =
-  process.stdout.isTTY && process.env["NO_COLOR"] === undefined;
+const useColor = process.stdout.isTTY && process.env["NO_COLOR"] === undefined;
 const wrap = (code: string) => (s: string) =>
   useColor ? `[${code}m${s}[0m` : s;
 const c = {
@@ -149,6 +149,7 @@ ${c.bold("COMMANDS")}
   file list                    List file ownership
 
   verify <id|path>             Re-confirm a task/lock is still true (resets decay)
+  sync                         Reconcile Stated claims with git (proposes only)
   decay [--apply]              Run memory-decay policy (dry run unless --apply)
 
   snapshot                     Write a restore point to .stated/snapshots/
@@ -207,7 +208,9 @@ function renderStatus(flags: Parsed["flags"]): void {
   out(`  ${c.bold("Goal")}        ${state.goal || c.dim("(none)")}`);
   out(
     `  ${c.bold("Frameworks")}  ${
-      state.frameworks.length ? state.frameworks.join(", ") : c.dim("(none detected)")
+      state.frameworks.length
+        ? state.frameworks.join(", ")
+        : c.dim("(none detected)")
     }`,
   );
   // Freshness banner.
@@ -245,7 +248,9 @@ function renderStatus(flags: Parsed["flags"]): void {
     out("");
     out(c.bold("  Locked Files"));
     for (const f of state.lockedFiles) {
-      out(`    ${c.yellow("🔒")} ${f.path} ${c.dim(`@${f.owner}`)}${ageSuffix(f.confidence, f.ageMs)}`);
+      out(
+        `    ${c.yellow("🔒")} ${f.path} ${c.dim(`@${f.owner}`)}${ageSuffix(f.confidence, f.ageMs)}`,
+      );
     }
   }
   if (state.recentDecisions.length) {
@@ -288,7 +293,7 @@ const commands: Record<string, Handler> = {
     if (res.frameworks.length) {
       out(c.dim(`  Detected: ${res.frameworks.join(", ")}`));
     }
-    out(c.dim("  Next: stated agent register \"Claude Code\""));
+    out(c.dim('  Next: stated agent register "Claude Code"'));
   },
 
   status: (_rest, flags) => renderStatus(flags),
@@ -309,7 +314,9 @@ const commands: Record<string, Handler> = {
     if (!query) throw new Error("Missing argument: search query");
     const limit = Number(flagStr(flags, "limit")) || 10;
     const hits = searchProject(root(), query, {
-      ...(flagStr(flags, "type") ? { type: flagStr(flags, "type") as SearchType } : {}),
+      ...(flagStr(flags, "type")
+        ? { type: flagStr(flags, "type") as SearchType }
+        : {}),
       ...(runScope(flags) ? { run: runScope(flags)! } : {}),
       limit,
     });
@@ -321,7 +328,9 @@ const commands: Record<string, Handler> = {
       goal: c.green,
     };
     for (const h of hits) {
-      const tag = (TYPE_COLOR[h.type] ?? ((s: string) => s))(`[${h.type}]`.padEnd(11));
+      const tag = (TYPE_COLOR[h.type] ?? ((s: string) => s))(
+        `[${h.type}]`.padEnd(11),
+      );
       out(`${tag} ${h.title} ${c.gray(h.id)} ${c.dim(`(${h.score})`)}`);
       out(`            ${c.dim(h.snippet)}`);
     }
@@ -331,7 +340,11 @@ const commands: Record<string, Handler> = {
     const sub = rest[0];
     if (sub === "add") {
       const text = need(rest, 1, "goal text");
-      const goals = addGoal(root(), rest.slice(1).join(" ") || text, actor(flags));
+      const goals = addGoal(
+        root(),
+        rest.slice(1).join(" ") || text,
+        actor(flags),
+      );
       out(c.green(`✔ Goal added. ${goals.active.length} active.`));
     } else if (sub === "complete" || sub === "done") {
       const q = need(rest, 1, "goal query");
@@ -377,7 +390,8 @@ const commands: Record<string, Handler> = {
       case "claim": {
         const id = need(rest, 1, "task id");
         const who = actor(flags);
-        if (!who) throw new Error("Provide --agent <name> (or set STATED_AGENT).");
+        if (!who)
+          throw new Error("Provide --agent <name> (or set STATED_AGENT).");
         const t = claimTask(r, id, who, { force: Boolean(flags["force"]) });
         out(c.green(`✔ ${who} claimed ${t.title} ${c.gray(t.id)}`));
         break;
@@ -407,7 +421,9 @@ const commands: Record<string, Handler> = {
         const tasks = readTasks(r).filter((t) => !scope || t.runId === scope);
         if (flags["json"]) return out(JSON.stringify(tasks, null, 2));
         if (!tasks.length) {
-          return out(c.dim(scope ? `(no tasks in run "${scope}")` : "(no tasks)"));
+          return out(
+            c.dim(scope ? `(no tasks in run "${scope}")` : "(no tasks)"),
+          );
         }
         for (const t of tasks) {
           const color = STATUS_COLOR[t.status] ?? ((s: string) => s);
@@ -432,8 +448,13 @@ const commands: Record<string, Handler> = {
         root(),
         {
           decision: text,
-          ...(flagStr(flags, "reason") ? { reason: flagStr(flags, "reason")! } : {}),
+          ...(flagStr(flags, "reason")
+            ? { reason: flagStr(flags, "reason")! }
+            : {}),
           ...(flagStr(flags, "by") ? { madeBy: flagStr(flags, "by")! } : {}),
+          ...(flagStr(flags, "supersedes")
+            ? { supersedes: flagStr(flags, "supersedes")! }
+            : {}),
           ...(runScope(flags) ? { runId: runScope(flags)! } : {}),
         },
         actor(flags),
@@ -441,11 +462,19 @@ const commands: Record<string, Handler> = {
       out(c.green(`✔ Decision recorded ${c.gray(d.id)}`));
     } else if (sub === "list" || sub === undefined) {
       const scope = runScope(flags);
-      const ds = readDecisions(root()).filter((d) => !scope || d.runId === scope);
+      const ds = readDecisions(root()).filter(
+        (d) => !scope || d.runId === scope,
+      );
       if (flags["json"]) return out(JSON.stringify(ds, null, 2));
       if (!ds.length) return out(c.dim("(no decisions)"));
       for (const d of ds) {
-        out(`${c.gray(d.date)}  ${d.decision}${d.reason ? c.dim(` — ${d.reason}`) : ""} ${c.dim(`(${d.madeBy})`)}`);
+        const status =
+          d.status === "superseded"
+            ? c.dim(` superseded by ${d.supersededBy}`)
+            : "";
+        out(
+          `${c.gray(d.date)}  ${d.decision}${d.reason ? c.dim(` — ${d.reason}`) : ""} ${c.dim(`(${d.madeBy})`)}${status}`,
+        );
       }
     } else {
       throw new Error(`Unknown decision subcommand: ${sub}`);
@@ -465,8 +494,15 @@ const commands: Record<string, Handler> = {
       if (!agents.length) return out(c.dim("(no agents)"));
       for (const a of agents) {
         const live = liveStatus(a);
-        const dot = live === "active" ? c.green("●") : live === "idle" ? c.yellow("●") : c.gray("●");
-        out(`${dot} ${a.name} ${c.dim(`(${a.type}) — ${live}, last seen ${a.lastSeen}`)}`);
+        const dot =
+          live === "active"
+            ? c.green("●")
+            : live === "idle"
+              ? c.yellow("●")
+              : c.gray("●");
+        out(
+          `${dot} ${a.name} ${c.dim(`(${a.type}) — ${live}, last seen ${a.lastSeen}`)}`,
+        );
       }
     } else {
       throw new Error(`Unknown agent subcommand: ${sub}`);
@@ -478,8 +514,11 @@ const commands: Record<string, Handler> = {
     if (sub === "claim") {
       const path = need(rest, 1, "file path");
       const who = actor(flags);
-      if (!who) throw new Error("Provide --agent <name> (or set STATED_AGENT).");
-      const f = claimFile(root(), path, who, { force: Boolean(flags["force"]) });
+      if (!who)
+        throw new Error("Provide --agent <name> (or set STATED_AGENT).");
+      const f = claimFile(root(), path, who, {
+        force: Boolean(flags["force"]),
+      });
       out(c.green(`✔ ${who} claimed ${f.path}`));
     } else if (sub === "release") {
       const path = need(rest, 1, "file path");
@@ -487,13 +526,19 @@ const commands: Record<string, Handler> = {
         ...(actor(flags) ? { owner: actor(flags)! } : {}),
         force: Boolean(flags["force"]),
       });
-      out(removed ? c.green(`✔ Released ${path}`) : c.yellow(`⚠ No claim on ${path}`));
+      out(
+        removed
+          ? c.green(`✔ Released ${path}`)
+          : c.yellow(`⚠ No claim on ${path}`),
+      );
     } else if (sub === "list" || sub === undefined) {
       const files = readFiles(root());
       if (flags["json"]) return out(JSON.stringify(files, null, 2));
       if (!files.length) return out(c.dim("(no file claims)"));
       for (const f of files) {
-        out(`${f.locked ? c.yellow("🔒") : "  "} ${f.path} ${c.dim(`@${f.owner}`)}`);
+        out(
+          `${f.locked ? c.yellow("🔒") : "  "} ${f.path} ${c.dim(`@${f.owner}`)}`,
+        );
       }
     } else {
       throw new Error(`Unknown file subcommand: ${sub}`);
@@ -524,14 +569,40 @@ const commands: Record<string, Handler> = {
       return;
     }
     for (const a of report.actions) {
-      out(`${c.yellow("•")} ${a.kind} ${c.bold(a.target)} ${c.dim(`— ${a.detail}`)}`);
+      out(
+        `${c.yellow("•")} ${a.kind} ${c.bold(a.target)} ${c.dim(`— ${a.detail}`)}`,
+      );
     }
     out("");
     if (apply) {
       out(c.green(`✔ Applied ${report.actions.length} decay action(s).`));
       if (report.archiveDir) out(c.dim(`  Archived to ${report.archiveDir}`));
     } else {
-      out(c.dim(`Dry run — ${report.actions.length} action(s). Re-run with --apply to perform them.`));
+      out(
+        c.dim(
+          `Dry run — ${report.actions.length} action(s). Re-run with --apply to perform them.`,
+        ),
+      );
+    }
+  },
+
+  sync(_rest, flags) {
+    const report = syncProject(root(), { actor: actor(flags) });
+    if (flags["json"]) return out(JSON.stringify(report, null, 2));
+    out(`${c.bold("Branch:")} ${report.branch}`);
+    if (report.dirtyFiles.length) {
+      out(`${c.bold("Dirty files:")} ${report.dirtyFiles.length}`);
+      for (const f of report.dirtyFiles) out(`  ${f}`);
+    } else {
+      out(`${c.bold("Dirty files:")} none`);
+    }
+    if (!report.suggestions.length) {
+      out(c.green("✔ No sync suggestions."));
+      return;
+    }
+    out(c.yellow("Suggestions:"));
+    for (const s of report.suggestions) {
+      out(`- ${s.kind} ${c.bold(s.target)} ${c.dim(`— ${s.reason}`)}`);
     }
   },
 
@@ -553,7 +624,11 @@ const commands: Record<string, Handler> = {
     if (flags["json"]) return out(JSON.stringify(report, null, 2));
     for (const f of report.findings) {
       const icon =
-        f.level === "ok" ? c.green("✔") : f.level === "warn" ? c.yellow("⚠") : c.red("✖");
+        f.level === "ok"
+          ? c.green("✔")
+          : f.level === "warn"
+            ? c.yellow("⚠")
+            : c.red("✖");
       out(`${icon} ${f.message}`);
     }
     out("");
@@ -566,7 +641,9 @@ const commands: Record<string, Handler> = {
 commands["init"] = commands["init"]!;
 
 /** Main CLI entry point. Returns a process exit code. */
-export async function run(argv: string[] = process.argv.slice(2)): Promise<number> {
+export async function run(
+  argv: string[] = process.argv.slice(2),
+): Promise<number> {
   const { positionals, flags } = parse(argv);
   const cmd = positionals[0];
 

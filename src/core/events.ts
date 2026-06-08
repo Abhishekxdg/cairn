@@ -44,21 +44,37 @@ export function recentEvents(root: string, n: number): StatedEvent[] {
  * Returned newest-first.
  */
 export function decisionsFromEvents(root: string): Decision[] {
-  const out: Decision[] = [];
+  const byId = new Map<string, Decision>();
+  const order: string[] = [];
   for (const ev of readEvents(root)) {
-    if (ev.type !== "decision_added" || !ev.data) continue;
-    const d = ev.data as Partial<Decision>;
-    if (!d.id || !d.decision) continue;
-    out.push({
-      id: d.id,
-      date: d.date ?? ev.at.slice(0, 10),
-      decision: d.decision,
-      reason: d.reason ?? "",
-      madeBy: d.madeBy ?? ev.actor ?? "unknown",
-      createdAt: d.createdAt ?? ev.at,
-      ...(d.runId ? { runId: d.runId } : {}),
-    });
+    if (ev.type === "decision_added" && ev.data) {
+      const d = ev.data as Partial<Decision>;
+      if (!d.id || !d.decision) continue;
+      byId.set(d.id, {
+        id: d.id,
+        status: d.status ?? "active",
+        ...(d.supersededBy ? { supersededBy: d.supersededBy } : {}),
+        date: d.date ?? ev.at.slice(0, 10),
+        decision: d.decision,
+        reason: d.reason ?? "",
+        madeBy: d.madeBy ?? ev.actor ?? "unknown",
+        createdAt: d.createdAt ?? ev.at,
+        ...(d.runId ? { runId: d.runId } : {}),
+      });
+      order.push(d.id);
+      continue;
+    }
+    if (ev.type === "decision_superseded" && ev.data) {
+      const oldId = String(ev.data["id"] ?? "");
+      const supersededBy = String(ev.data["supersededBy"] ?? "");
+      const existing = byId.get(oldId);
+      if (!existing || !supersededBy) continue;
+      existing.status = "superseded";
+      existing.supersededBy = supersededBy;
+    }
   }
-  out.reverse();
-  return out;
+  return order
+    .map((id) => byId.get(id))
+    .filter((d): d is Decision => Boolean(d))
+    .reverse();
 }

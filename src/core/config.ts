@@ -1,5 +1,5 @@
 import type { Confidence } from "./types.js";
-import { exists, readJson, writeJson } from "./io.js";
+import { exists, readJson, writeJson, withProjectLock } from "./io.js";
 import { statedPaths } from "./paths.js";
 
 /**
@@ -78,7 +78,9 @@ export function loadConfig(root: string): StatedConfig {
 
 /** Write a configuration file (used by `stated config` / tests). */
 export function writeConfig(root: string, config: StatedConfig): void {
-  writeJson(statedPaths(root).config, config);
+  withProjectLock(root, () => {
+    writeJson(statedPaths(root).config, config);
+  });
 }
 
 /** Thresholds for a given decaying kind from a resolved config. */

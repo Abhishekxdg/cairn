@@ -29,6 +29,7 @@ export * from "./decisions.js";
 export * from "./agents.js";
 export * from "./files.js";
 export * from "./search.js";
+export * from "./sync.js";
 export * from "./snapshot.js";
 export * from "./init.js";
 export * from "./doctor.js";

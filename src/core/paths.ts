@@ -16,6 +16,7 @@ export const FILE = {
   state: "state.json",
   events: "events.jsonl",
   config: "config.json",
+  gitignore: ".gitignore",
   snapshots: "snapshots",
 } as const;
 
@@ -35,6 +36,7 @@ export interface StatedPaths {
   state: string;
   events: string;
   config: string;
+  gitignore: string;
   snapshots: string;
 }
 
@@ -55,6 +57,7 @@ export function statedPaths(root: string): StatedPaths {
     state: join(dir, FILE.state),
     events: join(dir, FILE.events),
     config: join(dir, FILE.config),
+    gitignore: join(dir, FILE.gitignore),
     snapshots: join(dir, FILE.snapshots),
   };
 }
