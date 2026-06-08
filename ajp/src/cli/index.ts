@@ -11,6 +11,7 @@ import { renderTimeline } from "../engines/timeline.js";
 import { detectGit } from "../engines/git.js";
 import { pruneAgents } from "../engines/agents.js";
 import { compactJournal } from "../engines/compaction.js";
+import { setupProject } from "../setup/install.js";
 
 const VERSION = "0.1.0";
 
@@ -57,7 +58,8 @@ ${c.bold("USAGE")}
   ajp <command> [args] [--flags]
 
 ${c.bold("COMMANDS")}
-  init                       Create a .agent/ journal here
+  init                       Create a .agent/ journal + teach coding agents
+  setup                      Re-teach coding agents (writes AJP rules to their files)
   status                     Show derived project state
   append --type T            Append an event (--payload '<json>' --actor N)
   state                      Print full derived state (JSON)
@@ -100,7 +102,25 @@ const commands: Record<string, Handler> = {
     out(c.dim(`  projectId: ${res.projectId}`));
     const git = detectGit(cwd);
     if (git.isRepo) out(c.dim(`  git: ${git.branch ?? "(detached)"}`));
+    // Also teach the coding agents (unless --no-agents).
+    if (!flags["no-agents"]) {
+      const s = setupProject(cwd, { all: Boolean(flags["all"]) });
+      const touched = [...s.filesCreated, ...s.filesUpdated];
+      if (touched.length) out(c.dim(`  taught agents via: ${touched.join(", ")}`));
+    }
     out(c.dim('  Next: ajp append --type agent.registered --payload \'{"name":"Claude Code"}\''));
+  },
+
+  setup(_rest, flags) {
+    const cwd = process.cwd();
+    const r = setupProject(cwd, { all: Boolean(flags["all"]) });
+    if (flags["json"]) return out(JSON.stringify(r, null, 2));
+    out(c.green("✔ AJP set up for this project"));
+    out(c.dim(r.initializedJournal ? "  • created .agent/ journal" : "  • .agent/ journal present"));
+    const touched = [...r.filesCreated, ...r.filesUpdated];
+    out(touched.length
+      ? c.dim(`  • taught agents via: ${touched.join(", ")}`)
+      : c.dim("  • agent instruction files already current"));
   },
 
   status(_rest, flags) {

@@ -39,6 +39,7 @@
   "files": [
     "dist",
     "bin",
+    "scripts",
     "README.md",
     "docs",
     "LICENSE"
@@ -49,6 +50,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
+    "postinstall": "node scripts/postinstall.mjs",
     "prepublishOnly": "npm run clean && npm run build",
     "test": "vitest run",
     "test:watch": "vitest",

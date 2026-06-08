@@ -35,17 +35,44 @@ and write. The `.agent/` directory is to AI memory what `.git` is to source.
 - **Derivable.** Lose every cache and snapshot and you lose nothing — state
   rebuilds from history.
 
-## Install
-
-```bash
-npm install -g agent-journal-protocol
-```
-
-## Quickstart
+## Install — one command, zero config
 
 ```bash
 cd your-project
-ajp init
+npm install --save-dev agent-journal-protocol
+```
+
+That's it. A `postinstall` step automatically:
+
+1. **Creates the `.agent/` journal** in your project.
+2. **Teaches every coding agent how to use it** — it writes the AJP usage rules
+   into the instruction files agents already read on their own
+   (`AGENTS.md`, `CLAUDE.md`, and any existing `GEMINI.md` / `.cursorrules` /
+   `.github/copilot-instructions.md`). Your own content in those files is kept;
+   the AJP rules go in a managed block between markers.
+
+No MCP, no manual wiring. The next time Claude Code, Codex, Cursor, Copilot or
+Gemini opens the repo, it reads those rules and starts recording to the journal
+with the `ajp` CLI.
+
+Re-run anytime with `ajp setup` (add `--all` to also create the secondary agent
+files). Opt out of the auto-step with `AJP_NO_POSTINSTALL=1`. Prefer it global?
+`npm install -g agent-journal-protocol`, then `ajp setup` per project.
+
+### How your agents use it (the rules they're taught)
+
+Agents are instructed to: **read before they write** (`ajp context` at session
+start), then **record each real action as one event** — task created/started/
+completed, decision made (with a reason), knowledge learned, file modified — and
+to **never edit `.agent/` by hand** (it's append-only; history is truth). The
+full ruleset lives in [docs/AGENT_RULES.md](docs/AGENT_RULES.md) and is what gets
+injected into the agent files.
+
+## Quickstart (manual, if you skipped the package)
+
+```bash
+cd your-project
+ajp init          # journal + teach agents (same as the auto-setup)
 
 ajp append --type agent.registered --payload '{"name":"Claude Code"}' --actor "Claude Code"
 ajp append --type goal.created      --payload '{"id":"g1","title":"Launch MailMeld"}'
