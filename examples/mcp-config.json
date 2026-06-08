@@ -1,0 +1,12 @@
+{
+  "_comment": "Drop the `mcpServers` block into your client's MCP config (Cursor: .cursor/mcp.json, Claude Code: `claude mcp add stated -- stated mcp`). Set STATED_ROOT if the client launches the server from a different cwd than your project.",
+  "mcpServers": {
+    "stated": {
+      "command": "stated",
+      "args": ["mcp"],
+      "env": {
+        "STATED_ROOT": "/absolute/path/to/your/project"
+      }
+    }
+  }
+}

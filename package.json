@@ -1,0 +1,76 @@
+{
+  "name": "stated",
+  "version": "0.1.0",
+  "description": "Shared state layer for AI coding agents. Git for AI work — let Claude Code, Codex, Cursor and OpenHands collaborate without losing context.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Stated contributors",
+  "homepage": "https://github.com/stated-dev/stated#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/stated-dev/stated.git"
+  },
+  "bugs": {
+    "url": "https://github.com/stated-dev/stated/issues"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "claude-code",
+    "codex",
+    "cursor",
+    "openhands",
+    "mcp",
+    "model-context-protocol",
+    "shared-state",
+    "handoff",
+    "coordination",
+    "context",
+    "cli"
+  ],
+  "bin": {
+    "stated": "bin/stated.js",
+    "stated-mcp": "bin/stated-mcp.js"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/server.d.ts",
+      "import": "./dist/mcp/server.js"
+    }
+  },
+  "files": [
+    "dist",
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "stated": "node bin/stated.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
