@@ -1,15 +1,32 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isInitialized, findRoot, agentPaths } from "../core/paths.js";
 import { init } from "../core/manifest.js";
 import { EventStore } from "../core/store.js";
 import { detectGit } from "../engines/git.js";
 import { syncGit } from "../engines/gitsync.js";
+import { writeContextFile } from "../engines/recall.js";
 import { BEGIN_MARKER, END_MARKER, rulesBlock, upsertBetween } from "./rules.js";
+
+/** Absolute path to this package's `ajp` CLI entry (dist/setup → ../../bin). */
+const AJP_BIN = resolve(dirname(fileURLToPath(import.meta.url)), "../../bin/ajp.js");
+
+/**
+ * A robust `ajp` invocation that works even when `ajp` isn't on PATH: prefer the
+ * PATH command, fall back to running this package's binary with node.
+ */
+export function ajpInvocation(): string {
+  return `node ${AJP_BIN}`;
+}
 
 const HOOK_BEGIN = "# AJP:BEGIN auto-capture";
 const HOOK_END = "# AJP:END";
-const HOOK_BODY = `${HOOK_BEGIN}\ncommand -v ajp >/dev/null 2>&1 && ajp sync >/dev/null 2>&1 || true\n${HOOK_END}`;
+const HOOK_BODY = `${HOOK_BEGIN}
+if command -v ajp >/dev/null 2>&1; then ajp sync >/dev/null 2>&1 || true
+elif [ -f "${AJP_BIN}" ]; then node "${AJP_BIN}" sync >/dev/null 2>&1 || true
+fi
+${HOOK_END}`;
 
 /**
  * Install a git `post-commit` hook that runs `ajp sync`, so every commit is
@@ -79,8 +96,11 @@ export interface SetupResult {
  * Insert or update the AJP block in a single file's content. Returns the new
  * content and whether the file already had a block.
  */
-export function upsertBlock(existing: string): { content: string; updated: boolean } {
-  return upsertBetween(existing, BEGIN_MARKER, END_MARKER, rulesBlock());
+export function upsertBlock(
+  existing: string,
+  ajpBin = "ajp",
+): { content: string; updated: boolean } {
+  return upsertBetween(existing, BEGIN_MARKER, END_MARKER, rulesBlock(ajpBin));
 }
 
 /**
@@ -96,6 +116,8 @@ export function setupProject(
 ): SetupResult {
   const filesCreated: string[] = [];
   const filesUpdated: string[] = [];
+  // Embed a PATH-independent invocation in the rules so agents always reach ajp.
+  const ajpBin = ajpInvocation();
 
   // 1. Ensure the journal exists.
   let initializedJournal = false;
@@ -113,7 +135,7 @@ export function setupProject(
     if (!exists && !primary && !opts.all) continue;
 
     const existing = exists ? readFileSync(full, "utf8") : "";
-    const { content, updated } = upsertBlock(existing);
+    const { content, updated } = upsertBlock(existing, ajpBin);
     if (exists && updated && content === existing) continue; // nothing changed
 
     if (!exists) mkdirSync(dirname(full), { recursive: true });
@@ -125,15 +147,17 @@ export function setupProject(
   // 3. Wire git auto-capture: install the post-commit hook + set the sync
   //    baseline so future commits flow into the journal with no agent effort.
   let gitHook = false;
-  if (opts.gitHook !== false) {
-    gitHook = installGitHook(root);
-    if (gitHook) {
-      const store = new EventStore(agentPaths(root).db);
-      try {
-        syncGit(store, root); // baseline (or capture, if a baseline already existed)
-      } finally {
-        store.close();
+  {
+    const store = new EventStore(agentPaths(root).db);
+    try {
+      if (opts.gitHook !== false) {
+        gitHook = installGitHook(root);
+        if (gitHook) syncGit(store, root); // baseline or capture
       }
+      // 4. Render the instant-recall file so a new agent is oriented by one read.
+      writeContextFile(store, root);
+    } finally {
+      store.close();
     }
   }
 

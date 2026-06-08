@@ -12,11 +12,12 @@ import { detectGit } from "../engines/git.js";
 import { pruneAgents } from "../engines/agents.js";
 import { compactJournal } from "../engines/compaction.js";
 import { syncGit } from "../engines/gitsync.js";
+import { writeContextFile, renderRecall } from "../engines/recall.js";
 import { setupProject } from "../setup/install.js";
 import { installGlobal, uninstallGlobal } from "../setup/global.js";
 import { renderProjectSetup, renderGlobalSetup } from "./screens.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.1";
 
 // --- styling -----------------------------------------------------------------
 const useColor = process.stdout.isTTY && process.env["NO_COLOR"] === undefined;
@@ -69,6 +70,7 @@ ${c.bold("COMMANDS")}
   append --type T            Append an event (--payload '<json>' --actor N)
   state                      Print full derived state (JSON)
   timeline                   Human-readable timeline (--since <seq> --type T)
+  recall                     Instant "where were we" (also written to .agent/CONTEXT.md)
   context [--level L]        Compile minimum-token context (small|medium|large|full)
   sync                       Auto-capture file events from git history (--full)
   snapshot                   Force a state snapshot
@@ -211,11 +213,21 @@ const commands: Record<string, Handler> = {
     } finally { store.close(); }
   },
 
+  recall(_rest, flags) {
+    const r = requireRoot();
+    const store = openStore();
+    try {
+      const ctx = writeContextFile(store, r); // refresh + return
+      out(flags["json"] ? JSON.stringify(ctx, null, 2) : renderRecall(ctx));
+    } finally { store.close(); }
+  },
+
   sync(_rest, flags) {
     const r = requireRoot();
     const store = openStore();
     try {
       const res = syncGit(store, r, { full: Boolean(flags["full"]) });
+      writeContextFile(store, r); // keep instant-recall file current
       if (flags["json"]) return out(JSON.stringify(res, null, 2));
       if (!res.synced) return out(c.yellow("⚠ Not a git repo — nothing to sync."));
       out(res.events

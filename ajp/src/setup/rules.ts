@@ -8,17 +8,31 @@ export const BEGIN_MARKER =
   "<!-- AJP:BEGIN (managed by agent-journal-protocol — do not edit between markers) -->";
 export const END_MARKER = "<!-- AJP:END -->";
 
-/** The rules block (without markers). */
-export const RULES_BODY = `## Agent Journal Protocol (AJP) — shared project memory
+/**
+ * The rules block body. `ajpBin` is the command agents should use to run AJP —
+ * normally `ajp`, but setup passes the resolved ABSOLUTE invocation so agents
+ * work even when `ajp` isn't on their PATH.
+ */
+export function rulesBody(ajpBin = "ajp"): string {
+  const onPath = ajpBin === "ajp";
+  const pathNote = onPath
+    ? ""
+    : `\n> NOTE: if \`ajp: command not found\`, run it as \`${ajpBin}\` instead\n> (substitute that for \`ajp\` in every command below).\n`;
+  const footer = onPath
+    ? ""
+    : `\n\n(Reminder: if \`ajp\` isn't found, run it as \`${ajpBin}\`.)`;
+
+  return `## Agent Journal Protocol (AJP) — shared project memory
 
 This project has a shared, append-only memory journal in \`.agent/\`. It is the
 source of truth for goals, tasks, decisions and what every agent has done. Use the
 \`ajp\` command-line tool to read and write it. **Always keep it up to date** so work
 survives across sessions and so other agents never duplicate or undo your work.
-
-### At the start of every session
-1. Load context (cheap, one read):
-   \`ajp context --level small\`
+${pathNote}
+### At the start of every session — instant recall
+1. **Fastest:** read \`.agent/CONTEXT.md\` — a tiny, always-current summary (goal,
+   current task, decisions, recent activity, next steps). No tool needed.
+   Equivalent command: \`ajp recall\`.
 2. Announce yourself (use YOUR name as the actor everywhere):
    \`ajp append --type agent.registered --payload '{"name":"<you>"}' --actor "<you>"\`
 
@@ -34,13 +48,14 @@ effort only on intent:
 - Learn a durable fact: \`ajp append --type knowledge.learned --payload '{"statement":"..."}' --actor "<you>"\`
 
 ### Reading the journal anytime
+- \`ajp recall\` — the fastest, smallest "where were we" (same as \`.agent/CONTEXT.md\`)
 - \`ajp status\`   — current goal, active tasks, decisions, agents
 - \`ajp context --level small|medium|large|full\` — compact context for your prompt
 - \`ajp timeline\` — human-readable "what happened"
 
 ### Rules (follow these)
-1. **Read before you write.** Run \`ajp context\` first. Do not create a task that
-   already exists and is active.
+1. **Read before you write.** Read \`.agent/CONTEXT.md\` (or \`ajp recall\`) first. Do
+   not create a task that already exists and is active.
 2. **Record decisions immediately**, always with a \`rationale\`. A decision not in
    the journal does not exist.
 3. **One event per real action.** Keep payloads small and factual.
@@ -53,11 +68,15 @@ effort only on intent:
 7. At the end of a session: \`ajp append --type session.ended --actor "<you>"\`.
 
 The \`.agent/\` journal is committed with the repo (its derived caches are
-git-ignored automatically). Treat it like shared team memory.`;
+git-ignored automatically). Treat it like shared team memory.${footer}`;
+}
 
-/** The full block including markers, ready to write into a file. */
-export function rulesBlock(): string {
-  return `${BEGIN_MARKER}\n${RULES_BODY}\n${END_MARKER}\n`;
+/** The rules block body with the default `ajp` invocation. */
+export const RULES_BODY = rulesBody();
+
+/** The full block including markers. Pass the resolved `ajpBin` from setup. */
+export function rulesBlock(ajpBin = "ajp"): string {
+  return `${BEGIN_MARKER}\n${rulesBody(ajpBin)}\n${END_MARKER}\n`;
 }
 
 // --- Global bootstrap (Option A: install once, agent self-sets-up projects) --
@@ -81,8 +100,8 @@ memory journal for AI agents, stored in a project's \`.agent/\` directory.
 1. If the command \`ajp\` is available AND no \`.agent/\` directory exists at the repo
    root, run once: \`ajp setup\`
    (creates the journal and writes the project's AJP rules into its agent files).
-2. Then follow that project's AJP rules — load context at session start
-   (\`ajp context --level small\`), and record what you do as events
+2. Then follow that project's AJP rules — fastest recall is to read
+   \`.agent/CONTEXT.md\` (or run \`ajp recall\`); record what you do as events
    (\`ajp append --type ... --payload '{...}' --actor "<you>"\`).
 
 If \`ajp\` is not installed, skip silently — do not block your work on it.`;

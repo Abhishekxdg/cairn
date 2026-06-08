@@ -42,6 +42,7 @@ import { detectGit, gitCorrelation, type GitInfo } from "../engines/git.js";
 import { pruneAgents, staleAgents, type PruneReport } from "../engines/agents.js";
 import { compactJournal, type CompactionReport } from "../engines/compaction.js";
 import { syncGit, type GitSyncResult } from "../engines/gitsync.js";
+import { writeContextFile } from "../engines/recall.js";
 
 /**
  * AgentJournal — the high-level TypeScript SDK.
@@ -176,6 +177,13 @@ export class AgentJournal {
     if (snapshotDue(this.db, this.policy)) {
       createSnapshot(this.db, deriveState(this.db));
     }
+    // Keep the instant-recall file current after every state change. Never let
+    // a recall-write failure break an append.
+    try {
+      writeContextFile(this.db, this.dbPath ? this.cwd : this.root);
+    } catch {
+      /* recall file is best-effort */
+    }
   }
 
   // --- Query / derive --------------------------------------------------------
@@ -260,7 +268,19 @@ export class AgentJournal {
    * typically wired to a git post-commit hook by `ajp setup`.
    */
   sync(opts: { full?: boolean } = {}): GitSyncResult {
-    return syncGit(this.db, this.dbPath ? this.cwd : this.root, opts);
+    const root = this.dbPath ? this.cwd : this.root;
+    const res = syncGit(this.db, root, opts);
+    try {
+      writeContextFile(this.db, root);
+    } catch {
+      /* best-effort */
+    }
+    return res;
+  }
+
+  /** The instant-recall context (also persisted to `.agent/CONTEXT.md`). */
+  recall() {
+    return writeContextFile(this.db, this.dbPath ? this.cwd : this.root);
   }
 
   health(): HealthMetrics {
