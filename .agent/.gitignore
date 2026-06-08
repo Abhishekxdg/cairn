@@ -1,0 +1,7 @@
+# Derived/optimization data — rebuildable from the journal, not committed.
+journal.db-wal
+journal.db-shm
+state/
+snapshots/
+indexes/
+locks/
