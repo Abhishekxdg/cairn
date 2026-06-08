@@ -33,6 +33,13 @@ export interface AddTaskInput {
   priority?: TaskPriority;
   owner?: string;
   status?: TaskStatus;
+  /** Optional session/run scope for this task. */
+  runId?: string;
+}
+
+/** Tasks belonging to a given run/session scope. */
+export function tasksInRun(root: string, runId: string): Task[] {
+  return readTasks(root).filter((t) => t.runId === runId);
 }
 
 /** Create a new task, append an event, and regenerate the snapshot. */
@@ -53,6 +60,8 @@ export function addTask(
     priority: input.priority ?? "medium",
     createdAt: now,
     updatedAt: now,
+    lastVerifiedAt: now,
+    ...(input.runId?.trim() ? { runId: input.runId.trim() } : {}),
   };
   const tasks = readTasks(root);
   tasks.push(task);
@@ -70,8 +79,30 @@ function mutate(root: string, id: string, fn: (t: Task) => void): Task {
   const task = tasks.find((t) => t.id === id);
   if (!task) throw new Error(`No task with id "${id}".`);
   fn(task);
-  task.updatedAt = nowIso();
+  const now = nowIso();
+  task.updatedAt = now;
+  // Touching a task is an implicit confirmation that it is still true.
+  task.lastVerifiedAt = now;
   writeTasks(root, tasks);
+  return task;
+}
+
+/**
+ * Re-confirm a task is still accurate without changing its content. Refreshes
+ * `lastVerifiedAt` so the staleness clock resets. This is how an agent says
+ * "I checked — this is still current" with zero side effects.
+ */
+export function verifyTask(root: string, id: string, actor?: string): Task {
+  const tasks = readTasks(root);
+  const task = tasks.find((t) => t.id === id);
+  if (!task) throw new Error(`No task with id "${id}".`);
+  task.lastVerifiedAt = nowIso();
+  writeTasks(root, tasks);
+  appendEvent(root, "memory_verified", {
+    ...(actor ? { actor } : {}),
+    data: { kind: "task", id },
+  });
+  regenerate(root);
   return task;
 }
 

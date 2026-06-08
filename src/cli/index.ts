@@ -22,10 +22,24 @@ import {
   readFiles,
   claimFile,
   releaseFile,
+  verifyTask,
+  verifyFile,
+  getTask,
+  fileOwner,
+  applyDecay,
+  ageLabel,
+  type Confidence,
+  searchProject,
+  type SearchType,
   requireProjectRoot,
   findProjectRoot,
   type TaskPriority,
 } from "../core/index.js";
+
+/** Resolve the active session/run scope from flag or env. */
+function runScope(flags: Parsed["flags"]): string | undefined {
+  return flagStr(flags, "run") ?? process.env["STATED_RUN"] ?? undefined;
+}
 
 const VERSION = "0.1.0";
 
@@ -112,6 +126,7 @@ ${c.bold("COMMANDS")}
   status                       Show the current shared project state
   state                        Print machine-readable state.json
   handoff                      Generate & print handoff.md
+  search <query>               Keyword-search tasks, decisions & goals (BM25; --run)
 
   goal add <text>              Add an active goal
   goal complete <query>        Mark a matching active goal completed
@@ -133,12 +148,16 @@ ${c.bold("COMMANDS")}
   file release <path>          Release a file
   file list                    List file ownership
 
+  verify <id|path>             Re-confirm a task/lock is still true (resets decay)
+  decay [--apply]              Run memory-decay policy (dry run unless --apply)
+
   snapshot                     Write a restore point to .stated/snapshots/
   doctor                       Validate .stated/ integrity
   mcp                          Start the MCP server (stdio) for AI clients
 
 ${c.bold("GLOBAL FLAGS")}
   --agent <name>   Attribute the action to an agent (or set STATED_AGENT)
+  --run <id>       Scope tasks/decisions to a session/run (or set STATED_RUN)
   --json           Emit JSON instead of formatted text
   --force          Override locks / reinitialize
   --version, -v    Print version
@@ -161,6 +180,20 @@ const STATUS_COLOR: Record<string, (s: string) => string> = {
   completed: c.green,
 };
 
+/** Colorize text by confidence: stale=red, aging=yellow, fresh=unchanged. */
+function confColor(conf: Confidence): (s: string) => string {
+  if (conf === "stale") return c.red;
+  if (conf === "aging") return c.yellow;
+  return (s: string) => s;
+}
+
+/** A short " ⚠ stale (3 weeks)" suffix, dimmed; empty when fresh. */
+function ageSuffix(conf: Confidence, ageMs: number): string {
+  if (conf === "fresh") return "";
+  const label = conf === "stale" ? "⚠ stale" : "aging";
+  return ` ${confColor(conf)(label)} ${c.dim(`(${ageLabel(ageMs)})`)}`;
+}
+
 function renderStatus(flags: Parsed["flags"]): void {
   const r = root();
   const state = buildState(r);
@@ -177,6 +210,15 @@ function renderStatus(flags: Parsed["flags"]): void {
       state.frameworks.length ? state.frameworks.join(", ") : c.dim("(none detected)")
     }`,
   );
+  // Freshness banner.
+  const fr = state.freshness;
+  const frText =
+    fr.counts.stale === 0 && fr.counts.aging === 0
+      ? c.green("✓ all fresh")
+      : `${fr.counts.stale ? c.red(`⚠ ${fr.counts.stale} stale`) : ""}${
+          fr.counts.stale && fr.counts.aging ? ", " : ""
+        }${fr.counts.aging ? c.yellow(`${fr.counts.aging} aging`) : ""}`;
+  out(`  ${c.bold("Freshness")}   ${frText}`);
   out("");
   out(c.bold("  Active Tasks"));
   if (state.activeTasks.length) {
@@ -184,7 +226,7 @@ function renderStatus(flags: Parsed["flags"]): void {
       const color = STATUS_COLOR[t.status] ?? ((s: string) => s);
       const owner = t.owner ? c.dim(` @${t.owner}`) : "";
       out(
-        `    ${color(`[${t.status}]`.padEnd(11))} ${t.title} ${c.gray(t.id)}${owner}`,
+        `    ${color(`[${t.status}]`.padEnd(11))} ${t.title} ${c.gray(t.id)}${owner}${ageSuffix(t.confidence, t.ageMs)}`,
       );
     }
   } else {
@@ -203,7 +245,7 @@ function renderStatus(flags: Parsed["flags"]): void {
     out("");
     out(c.bold("  Locked Files"));
     for (const f of state.lockedFiles) {
-      out(`    ${c.yellow("🔒")} ${f.path} ${c.dim(`@${f.owner}`)}`);
+      out(`    ${c.yellow("🔒")} ${f.path} ${c.dim(`@${f.owner}`)}${ageSuffix(f.confidence, f.ageMs)}`);
     }
   }
   if (state.recentDecisions.length) {
@@ -262,6 +304,29 @@ const commands: Record<string, Handler> = {
     else out(text);
   },
 
+  search(rest, flags) {
+    const query = rest.join(" ").trim();
+    if (!query) throw new Error("Missing argument: search query");
+    const limit = Number(flagStr(flags, "limit")) || 10;
+    const hits = searchProject(root(), query, {
+      ...(flagStr(flags, "type") ? { type: flagStr(flags, "type") as SearchType } : {}),
+      ...(runScope(flags) ? { run: runScope(flags)! } : {}),
+      limit,
+    });
+    if (flags["json"]) return out(JSON.stringify(hits, null, 2));
+    if (!hits.length) return out(c.dim(`(no matches for "${query}")`));
+    const TYPE_COLOR: Record<string, (s: string) => string> = {
+      task: c.cyan,
+      decision: c.yellow,
+      goal: c.green,
+    };
+    for (const h of hits) {
+      const tag = (TYPE_COLOR[h.type] ?? ((s: string) => s))(`[${h.type}]`.padEnd(11));
+      out(`${tag} ${h.title} ${c.gray(h.id)} ${c.dim(`(${h.score})`)}`);
+      out(`            ${c.dim(h.snippet)}`);
+    }
+  },
+
   goal(rest, flags) {
     const sub = rest[0];
     if (sub === "add") {
@@ -302,6 +367,7 @@ const commands: Record<string, Handler> = {
               : {}),
             priority: (flagStr(flags, "priority") as TaskPriority) ?? "medium",
             ...(actor(flags) && flags["claim"] ? { owner: actor(flags)! } : {}),
+            ...(runScope(flags) ? { runId: runScope(flags)! } : {}),
           },
           actor(flags),
         );
@@ -337,9 +403,12 @@ const commands: Record<string, Handler> = {
       }
       case "list":
       case undefined: {
-        const tasks = readTasks(r);
+        const scope = runScope(flags);
+        const tasks = readTasks(r).filter((t) => !scope || t.runId === scope);
         if (flags["json"]) return out(JSON.stringify(tasks, null, 2));
-        if (!tasks.length) return out(c.dim("(no tasks)"));
+        if (!tasks.length) {
+          return out(c.dim(scope ? `(no tasks in run "${scope}")` : "(no tasks)"));
+        }
         for (const t of tasks) {
           const color = STATUS_COLOR[t.status] ?? ((s: string) => s);
           const owner = t.owner ? c.dim(` @${t.owner}`) : "";
@@ -365,12 +434,14 @@ const commands: Record<string, Handler> = {
           decision: text,
           ...(flagStr(flags, "reason") ? { reason: flagStr(flags, "reason")! } : {}),
           ...(flagStr(flags, "by") ? { madeBy: flagStr(flags, "by")! } : {}),
+          ...(runScope(flags) ? { runId: runScope(flags)! } : {}),
         },
         actor(flags),
       );
       out(c.green(`✔ Decision recorded ${c.gray(d.id)}`));
     } else if (sub === "list" || sub === undefined) {
-      const ds = readDecisions(root());
+      const scope = runScope(flags);
+      const ds = readDecisions(root()).filter((d) => !scope || d.runId === scope);
       if (flags["json"]) return out(JSON.stringify(ds, null, 2));
       if (!ds.length) return out(c.dim("(no decisions)"));
       for (const d of ds) {
@@ -426,6 +497,41 @@ const commands: Record<string, Handler> = {
       }
     } else {
       throw new Error(`Unknown file subcommand: ${sub}`);
+    }
+  },
+
+  verify(rest, flags) {
+    const r = root();
+    const idOrPath = need(rest, 0, "task id or file path");
+    if (getTask(r, idOrPath)) {
+      const t = verifyTask(r, idOrPath, actor(flags));
+      out(c.green(`✔ Verified task ${t.title} ${c.gray(t.id)}`));
+    } else if (fileOwner(r, idOrPath)) {
+      const f = verifyFile(r, idOrPath, actor(flags));
+      out(c.green(`✔ Verified lock on ${f.path}`));
+    } else {
+      throw new Error(`No task or file claim matching "${idOrPath}".`);
+    }
+  },
+
+  decay(_rest, flags) {
+    const r = root();
+    const apply = Boolean(flags["apply"]);
+    const report = applyDecay(r, { apply });
+    if (flags["json"]) return out(JSON.stringify(report, null, 2));
+    if (!report.actions.length) {
+      out(c.dim("No decay actions. (Enable policies in .stated/config.json.)"));
+      return;
+    }
+    for (const a of report.actions) {
+      out(`${c.yellow("•")} ${a.kind} ${c.bold(a.target)} ${c.dim(`— ${a.detail}`)}`);
+    }
+    out("");
+    if (apply) {
+      out(c.green(`✔ Applied ${report.actions.length} decay action(s).`));
+      if (report.archiveDir) out(c.dim(`  Archived to ${report.archiveDir}`));
+    } else {
+      out(c.dim(`Dry run — ${report.actions.length} action(s). Re-run with --apply to perform them.`));
     }
   },
 

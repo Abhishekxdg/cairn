@@ -22,6 +22,8 @@ export interface AddDecisionInput {
   reason?: string;
   madeBy?: string;
   date?: string;
+  /** Optional session/run scope for this decision. */
+  runId?: string;
 }
 
 /** Record a decision and regenerate `decisions.md` + the snapshot. */
@@ -39,6 +41,7 @@ export function addDecision(
     reason: input.reason?.trim() ?? "",
     madeBy: input.madeBy?.trim() || actor || "unknown",
     createdAt: nowIso(),
+    ...(input.runId?.trim() ? { runId: input.runId.trim() } : {}),
   };
   appendEvent(root, "decision_added", {
     actor: decision.madeBy,

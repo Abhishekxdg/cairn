@@ -40,8 +40,18 @@ import {
   readFiles,
   claimFile as coreClaimFile,
   releaseFile as coreReleaseFile,
+  verifyTask as coreVerifyTask,
+  verifyFile as coreVerifyFile,
+  fileOwner,
+  applyDecay,
+  loadConfig,
+  type StatedConfig,
+  type DecayReport,
   readEvents,
+  searchProject,
   doctor as coreDoctor,
+  type SearchHit,
+  type SearchOptions,
   type AddTaskInput,
   type UpdateTaskInput,
   type AddDecisionInput,
@@ -60,6 +70,12 @@ export interface StatedOptions {
    * this name and the agent's `lastSeen` heartbeat is refreshed.
    */
   agent?: string;
+  /**
+   * Session/run scope. When set, created tasks/decisions are tagged with this
+   * run id, and the `*InRun` helpers filter to it. Lets one project carry
+   * parallel work streams.
+   */
+  run?: string;
 }
 
 /**
@@ -81,10 +97,13 @@ export class Stated {
   private readonly cwd: string;
   /** The agent identity used to attribute mutations, if any. */
   readonly agent: string | undefined;
+  /** The session/run scope applied to created tasks/decisions, if any. */
+  readonly run: string | undefined;
 
   constructor(options: StatedOptions = {}) {
     this.cwd = options.cwd ?? process.cwd();
     this.agent = options.agent;
+    this.run = options.run;
   }
 
   /** Resolve the project root, throwing if Stated is not initialized. */
@@ -197,7 +216,8 @@ export class Stated {
   // --- Tasks -----------------------------------------------------------------
 
   async getTasks(): Promise<Task[]> {
-    return readTasks(this.root);
+    const tasks = readTasks(this.root);
+    return this.run ? tasks.filter((t) => t.runId === this.run) : tasks;
   }
 
   async getTask(id: string): Promise<Task | undefined> {
@@ -206,8 +226,11 @@ export class Stated {
 
   async addTask(input: AddTaskInput | string): Promise<Task> {
     this.touch();
+    const base: AddTaskInput =
+      typeof input === "string" ? { title: input } : { ...input };
+    // The configured run scope applies unless the call overrides it.
     const normalized: AddTaskInput =
-      typeof input === "string" ? { title: input } : input;
+      this.run && base.runId === undefined ? { ...base, runId: this.run } : base;
     return coreAddTask(this.root, normalized, this.agent);
   }
 
@@ -246,13 +269,16 @@ export class Stated {
   // --- Decisions -------------------------------------------------------------
 
   async getDecisions(): Promise<Decision[]> {
-    return readDecisions(this.root);
+    const decisions = readDecisions(this.root);
+    return this.run ? decisions.filter((d) => d.runId === this.run) : decisions;
   }
 
   async addDecision(input: AddDecisionInput | string): Promise<Decision> {
     this.touch();
+    const base: AddDecisionInput =
+      typeof input === "string" ? { decision: input } : { ...input };
     const normalized: AddDecisionInput =
-      typeof input === "string" ? { decision: input } : input;
+      this.run && base.runId === undefined ? { ...base, runId: this.run } : base;
     return coreAddDecision(this.root, normalized, this.agent);
   }
 
@@ -283,6 +309,56 @@ export class Stated {
       ...(this.agent ? { owner: this.agent } : {}),
       ...opts,
     });
+  }
+
+  // --- Freshness / decay -----------------------------------------------------
+
+  /** Re-confirm a task is still accurate (refreshes its staleness clock). */
+  async verifyTask(id: string): Promise<Task> {
+    this.touch();
+    return coreVerifyTask(this.root, id, this.agent);
+  }
+
+  /** Re-confirm a file claim is still active (refreshes its staleness clock). */
+  async verifyFile(path: string): Promise<FileOwnership> {
+    this.touch();
+    return coreVerifyFile(this.root, path, this.agent);
+  }
+
+  /**
+   * Re-confirm a fact by id (task) or path (file claim). Resolves whichever
+   * exists. Throws if neither matches.
+   */
+  async verify(idOrPath: string): Promise<Task | FileOwnership> {
+    if (getTask(this.root, idOrPath)) return this.verifyTask(idOrPath);
+    if (fileOwner(this.root, idOrPath)) return this.verifyFile(idOrPath);
+    throw new Error(`No task or file claim matching "${idOrPath}".`);
+  }
+
+  /** The resolved project configuration (defaults if no config.json). */
+  async getConfig(): Promise<StatedConfig> {
+    return loadConfig(this.root);
+  }
+
+  /**
+   * Run the customizable memory-decay policy. Dry run by default — pass
+   * `{ apply: true }` to actually release stale locks / archive old tasks /
+   * trim events. All policies are off unless enabled in `.stated/config.json`.
+   */
+  async decay(opts: { apply?: boolean } = {}): Promise<DecayReport> {
+    return applyDecay(this.root, opts);
+  }
+
+  // --- Search ----------------------------------------------------------------
+
+  /**
+   * Keyword-search tasks, decisions and goals with BM25 (no embeddings).
+   * Returns ranked hits, highest score first.
+   */
+  async search(query: string, opts: SearchOptions = {}): Promise<SearchHit[]> {
+    const scoped: SearchOptions =
+      this.run && opts.run === undefined ? { ...opts, run: this.run } : opts;
+    return searchProject(this.root, query, scoped);
   }
 
   // --- Events ----------------------------------------------------------------

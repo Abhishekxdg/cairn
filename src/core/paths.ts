@@ -15,6 +15,7 @@ export const FILE = {
   handoff: "handoff.md",
   state: "state.json",
   events: "events.jsonl",
+  config: "config.json",
   snapshots: "snapshots",
 } as const;
 
@@ -33,6 +34,7 @@ export interface StatedPaths {
   handoff: string;
   state: string;
   events: string;
+  config: string;
   snapshots: string;
 }
 
@@ -52,6 +54,7 @@ export function statedPaths(root: string): StatedPaths {
     handoff: join(dir, FILE.handoff),
     state: join(dir, FILE.state),
     events: join(dir, FILE.events),
+    config: join(dir, FILE.config),
     snapshots: join(dir, FILE.snapshots),
   };
 }

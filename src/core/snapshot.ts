@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { State, Task } from "./types.js";
+import type { State, Task, TaskView, FileView } from "./types.js";
 import { ensureDir, writeJson, writeText } from "./io.js";
 import { statedPaths } from "./paths.js";
 import { nowIso } from "./ids.js";
@@ -11,6 +11,16 @@ import { readAgents, liveStatus } from "./agents.js";
 import { lockedFiles } from "./files.js";
 import { detectFrameworks } from "./framework.js";
 import { appendEvent } from "./events.js";
+import { loadConfig } from "./config.js";
+import {
+  viewTask,
+  viewFile,
+  summarize,
+  ageLabel,
+  confidenceBadge,
+  taskVerifiedAt,
+  fileVerifiedAt,
+} from "./staleness.js";
 
 /**
  * The snapshot engine.
@@ -52,11 +62,22 @@ function rankTasks(tasks: Task[]): Task[] {
 export function buildState(root: string, nowMs = Date.now()): State {
   const project = readProject(root);
   const goals = readGoals(root);
-  const tasks = rankTasks(activeTasks(root));
+  const config = loadConfig(root);
+  const tasks: TaskView[] = rankTasks(activeTasks(root)).map((t) =>
+    viewTask(t, nowMs, config),
+  );
+  const files: FileView[] = lockedFiles(root).map((f) =>
+    viewFile(f, nowMs, config),
+  );
   const decisions = readDecisions(root).slice(0, 5);
   const agents = readAgents(root)
     .map((a) => ({ ...a, status: liveStatus(a, nowMs) }))
     .filter((a) => a.status === "active");
+
+  const freshness = summarize([
+    ...tasks.map((t) => ({ confidence: t.confidence, iso: taskVerifiedAt(t) })),
+    ...files.map((f) => ({ confidence: f.confidence, iso: fileVerifiedAt(f) })),
+  ]);
 
   return {
     version: 1,
@@ -66,8 +87,9 @@ export function buildState(root: string, nowMs = Date.now()): State {
     activeTasks: tasks,
     recentDecisions: decisions,
     activeAgents: agents,
-    lockedFiles: lockedFiles(root),
+    lockedFiles: files,
     frameworks: detectFrameworks(root),
+    freshness,
     generatedAt: nowIso(),
   };
 }
@@ -96,12 +118,32 @@ export function nextSteps(state: State): string[] {
   return steps.slice(0, 7);
 }
 
+/** One-line freshness banner summarizing how trustworthy the state is. */
+export function freshnessBanner(state: State): string {
+  const { counts, lastActivityAt } = state.freshness;
+  const total = counts.fresh + counts.aging + counts.stale;
+  if (total === 0) return "Freshness: ✓ no active facts to age";
+  if (counts.stale === 0 && counts.aging === 0) {
+    return "Freshness: ✓ all fresh";
+  }
+  const parts: string[] = [];
+  if (counts.stale) parts.push(`⚠ ${counts.stale} stale`);
+  if (counts.aging) parts.push(`${counts.aging} aging`);
+  const nowMs = Date.parse(state.generatedAt);
+  const last = lastActivityAt
+    ? ` — last activity ${ageLabel(nowMs - Date.parse(lastActivityAt))} ago`
+    : "";
+  return `Freshness: ${parts.join(", ")}${last}`;
+}
+
 /** Render the handoff Markdown from a computed {@link State}. */
 export function renderHandoff(state: State): string {
   const lines: string[] = ["# Project Handoff", ""];
 
   const name = state.project.name || "(unnamed project)";
   lines.push(`Project: ${name}`, "");
+
+  lines.push(freshnessBanner(state), "");
 
   lines.push("Goal:", state.goal || "(no active goal)", "");
 
@@ -122,7 +164,11 @@ export function renderHandoff(state: State): string {
   if (state.activeTasks.length) {
     for (const t of state.activeTasks) {
       const owner = t.owner ? ` — ${t.owner}` : "";
-      lines.push(`- [${t.status}] ${t.title} (${t.id})${owner}`);
+      const age =
+        t.confidence === "fresh"
+          ? ""
+          : ` ${confidenceBadge(t.confidence)} (${ageLabel(t.ageMs)})`;
+      lines.push(`- [${t.status}] ${t.title} (${t.id})${owner}${age}`);
     }
   } else {
     lines.push("- (none)");
@@ -149,7 +195,13 @@ export function renderHandoff(state: State): string {
 
   lines.push("Locked Files:");
   if (state.lockedFiles.length) {
-    for (const f of state.lockedFiles) lines.push(`- ${f.path} (${f.owner})`);
+    for (const f of state.lockedFiles) {
+      const age =
+        f.confidence === "fresh"
+          ? ""
+          : ` ${confidenceBadge(f.confidence)} (${ageLabel(f.ageMs)})`;
+      lines.push(`- ${f.path} (${f.owner})${age}`);
+    }
   } else {
     lines.push("- (none)");
   }

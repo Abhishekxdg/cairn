@@ -56,6 +56,7 @@ export function decisionsFromEvents(root: string): Decision[] {
       reason: d.reason ?? "",
       madeBy: d.madeBy ?? ev.actor ?? "unknown",
       createdAt: d.createdAt ?? ev.at,
+      ...(d.runId ? { runId: d.runId } : {}),
     });
   }
   out.reverse();

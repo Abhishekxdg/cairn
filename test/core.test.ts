@@ -34,6 +34,9 @@ import {
   doctor,
   readEvents,
   detectFrameworks,
+  searchProject,
+  bm25Search,
+  tokenize,
 } from "../src/core/index.js";
 
 let dirs: string[] = [];
@@ -284,5 +287,59 @@ describe("project metadata", () => {
     const root = project();
     const info = readProject(root);
     expect(info.name.length).toBeGreaterThan(0);
+  });
+});
+
+describe("search (BM25)", () => {
+  it("tokenizes to lowercase alphanumeric terms", () => {
+    expect(tokenize("Build OAuth, v2!")).toEqual(["build", "oauth", "v2"]);
+  });
+
+  it("ranks the most relevant task first", () => {
+    const root = project();
+    addTask(root, { title: "Build OAuth login flow", description: "Google and GitHub" });
+    addTask(root, { title: "Write database migrations" });
+    addTask(root, { title: "Refactor billing module" });
+    const hits = searchProject(root, "oauth login");
+    expect(hits[0]?.type).toBe("task");
+    expect(hits[0]?.title).toContain("OAuth");
+    expect(hits[0]!.score).toBeGreaterThan(0);
+  });
+
+  it("searches across decisions and goals too", () => {
+    const root = project();
+    addDecision(root, { decision: "Use BullMQ for job queues", reason: "Reliable retries" });
+    addGoal(root, "Launch the payments service");
+    expect(searchProject(root, "bullmq")[0]?.type).toBe("decision");
+    expect(searchProject(root, "payments")[0]?.type).toBe("goal");
+  });
+
+  it("filters by type and respects the limit", () => {
+    const root = project();
+    addTask(root, { title: "queue worker setup" });
+    addDecision(root, { decision: "queue with BullMQ" });
+    const onlyTasks = searchProject(root, "queue", { type: "task" });
+    expect(onlyTasks.every((h) => h.type === "task")).toBe(true);
+    addTask(root, { title: "queue retry queue queue" });
+    expect(searchProject(root, "queue", { limit: 1 })).toHaveLength(1);
+  });
+
+  it("returns nothing for no overlap or empty query", () => {
+    const root = project();
+    addTask(root, { title: "Build OAuth" });
+    expect(searchProject(root, "kubernetes")).toEqual([]);
+    expect(searchProject(root, "")).toEqual([]);
+    expect(searchProject(root, "the and of")).toEqual([]); // stopwords only
+  });
+
+  it("is deterministic and tie-breaks stably by id", () => {
+    const docs = [
+      { type: "task" as const, id: "t_b", title: "queue", text: "queue" },
+      { type: "task" as const, id: "t_a", title: "queue", text: "queue" },
+    ];
+    const a = bm25Search(docs, "queue");
+    const b = bm25Search(docs, "queue");
+    expect(a.map((h) => h.id)).toEqual(["t_a", "t_b"]);
+    expect(a).toEqual(b);
   });
 });

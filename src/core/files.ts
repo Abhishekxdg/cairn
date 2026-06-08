@@ -63,11 +63,13 @@ export function claimFile(
     );
   }
 
+  const now = nowIso();
   const record: FileOwnership = {
     path: p,
     owner: o,
     locked: opts.lock ?? true,
-    claimedAt: nowIso(),
+    claimedAt: now,
+    lastVerifiedAt: now,
   };
   if (existing) {
     Object.assign(existing, record);
@@ -78,6 +80,29 @@ export function claimFile(
   appendEvent(root, "file_claimed", {
     actor: o,
     data: { path: p, owner: o, locked: record.locked },
+  });
+  regenerate(root);
+  return record;
+}
+
+/**
+ * Re-confirm a file claim is still active without re-claiming. Refreshes
+ * `lastVerifiedAt` so the lock's staleness clock resets.
+ */
+export function verifyFile(
+  root: string,
+  path: string,
+  actor?: string,
+): FileOwnership {
+  const p = normalizePath(path);
+  const files = readFiles(root);
+  const record = files.find((f) => f.path === p);
+  if (!record) throw new Error(`No claim on "${p}".`);
+  record.lastVerifiedAt = nowIso();
+  writeFiles(root, files);
+  appendEvent(root, "memory_verified", {
+    ...(actor ? { actor } : {}),
+    data: { kind: "file", path: p },
   });
   regenerate(root);
   return record;

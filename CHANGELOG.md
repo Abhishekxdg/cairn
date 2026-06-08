@@ -4,6 +4,42 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Sub-second recall (BM25 search).** `stated search <query>` ranks tasks,
+  decisions and goals with pure Okapi BM25 — no embeddings, no network, no
+  models. Deterministic ordering, `--type`/`--run`/`--limit` filters, and a
+  ~140-char snippet per hit. Stays under ~60 ms even at 5k facts / 2 MB, so an
+  agent pulls only the relevant memory instead of loading the whole handoff.
+  Exposed as the `search_memory` MCP tool and SDK `search()`. `search.ts`
+  (`tokenize`/`buildCorpus`/`bm25Search`/`searchProject`); tested in
+  `scope.test.ts`.
+- **Staleness signal.** Active tasks and file locks now carry `lastVerifiedAt`;
+  Stated derives a `confidence` (`fresh`/`aging`/`stale`) at read time and shows
+  it everywhere — `state.json` (`confidence` per fact + a `freshness` summary),
+  a handoff banner with inline ages, colorized `stated status`, and `stated
+  doctor` flagging every stale fact (the rot detector). A fact now decays
+  visibly instead of lying.
+- **`stated verify <id|path>`** + `verify_fact` MCP tool + SDK `verifyTask` /
+  `verifyFile` / `verify` — re-confirm a fact is still true without editing it,
+  resetting its staleness clock.
+- **Customizable memory decay (opt-in).** `.stated/config.json` configures
+  `staleness` thresholds and a `decay` policy (auto-release abandoned locks,
+  archive long-completed tasks, trim the event log). All policies default to `0`
+  (off). `stated decay` runs a dry run; `--apply` performs the cleanup, archiving
+  to `.stated/snapshots/`. Exposed as the `run_decay` MCP tool and SDK `decay()`.
+- New event types `memory_verified`, `memory_decayed`.
+- `config.ts` (`loadConfig`/`writeConfig`/`DEFAULT_CONFIG`), `staleness.ts`
+  (`confidenceFor`/`viewTask`/`viewFile`/`summarize`/`ageLabel`), `decay.ts`
+  (`applyDecay`). Test suites `staleness.test.ts` + `decay.test.ts`.
+
+### Notes
+
+- `Task.lastVerifiedAt` / `FileOwnership.lastVerifiedAt` are optional; legacy
+  `.stated/` data falls back to `updatedAt` / `claimedAt`. No migration needed.
+
 ## [0.1.0] - 2026-06-08
 
 ### Added

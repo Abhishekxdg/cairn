@@ -29,6 +29,18 @@ export interface Task {
   createdAt: string;
   /** ISO-8601 timestamp. */
   updatedAt: string;
+  /**
+   * ISO-8601 timestamp of the last time this task was confirmed still true —
+   * set on creation, refreshed on every mutation and on explicit `verify`.
+   * Optional for backward compatibility; readers fall back to `updatedAt`.
+   */
+  lastVerifiedAt?: string;
+  /**
+   * Optional session/run scope this task belongs to. Lets one project carry
+   * parallel work streams (e.g. a run per agent session) that can be filtered
+   * independently. Unset means project-wide.
+   */
+  runId?: string;
 }
 
 /** Container shape of `.stated/tasks.json`. */
@@ -64,6 +76,29 @@ export interface FileOwnership {
   locked: boolean;
   /** ISO-8601 timestamp of when the claim was made. */
   claimedAt: string;
+  /**
+   * ISO-8601 timestamp of the last time this claim was confirmed — refreshed on
+   * (re)claim and explicit `verify`. Optional; readers fall back to `claimedAt`.
+   */
+  lastVerifiedAt?: string;
+}
+
+/**
+ * Derived freshness of a decaying fact, computed from how long ago it was last
+ * verified. Never stored on disk — always a function of the current time.
+ */
+export type Confidence = "fresh" | "aging" | "stale";
+
+/** A decaying fact with its derived confidence + age, used in rendered state. */
+export type TaskView = Task & { confidence: Confidence; ageMs: number };
+export type FileView = FileOwnership & { confidence: Confidence; ageMs: number };
+
+/** Aggregate freshness of the whole project, shown as a handoff banner. */
+export interface Freshness {
+  overall: Confidence;
+  counts: { fresh: number; aging: number; stale: number };
+  /** ISO-8601 timestamp of the most recent verification across decaying facts. */
+  lastActivityAt: string | null;
 }
 
 /** A project decision. Canonical source is the `decision_added` event stream. */
@@ -76,6 +111,8 @@ export interface Decision {
   madeBy: string;
   /** ISO-8601 timestamp the decision was recorded. */
   createdAt: string;
+  /** Optional session/run scope this decision belongs to. Unset = project-wide. */
+  runId?: string;
 }
 
 /** Goals parsed from `.stated/goals.md`. */
@@ -115,11 +152,15 @@ export interface State {
   goal: string;
   project: ProjectInfo;
   goals: Goals;
-  activeTasks: Task[];
+  /** Active tasks, each annotated with derived confidence + age. */
+  activeTasks: TaskView[];
   recentDecisions: Decision[];
   activeAgents: Agent[];
-  lockedFiles: FileOwnership[];
+  /** Locked files, each annotated with derived confidence + age. */
+  lockedFiles: FileView[];
   frameworks: Framework[];
+  /** Aggregate freshness of the project's decaying facts. */
+  freshness: Freshness;
   /** ISO-8601 timestamp of the last snapshot regeneration. */
   generatedAt: string;
 }
@@ -138,8 +179,38 @@ export type EventType =
   | "decision_added"
   | "file_claimed"
   | "file_released"
+  | "memory_verified"
+  | "memory_decayed"
   | "handoff_generated"
   | "snapshot_created";
+
+/** Kind of document the keyword search ranks over. */
+export type SearchType = "task" | "decision" | "goal";
+
+/** A searchable unit built from a `.stated/` file (task, decision or goal). */
+export interface SearchDoc {
+  type: SearchType;
+  /** Stable identifier (task/decision id, or a synthetic `goal-*` id). */
+  id: string;
+  /** Short label for display. */
+  title: string;
+  /** Full text the BM25 ranker scores against. */
+  text: string;
+  /** Type-specific display metadata (status, date, owner, …). */
+  meta?: Record<string, unknown>;
+}
+
+/** A single ranked search result. */
+export interface SearchHit {
+  type: SearchType;
+  id: string;
+  title: string;
+  /** BM25 relevance score, higher is better. */
+  score: number;
+  /** A short excerpt around the first query-term match. */
+  snippet: string;
+  meta: Record<string, unknown>;
+}
 
 /** A single append-only event record. */
 export interface StatedEvent {

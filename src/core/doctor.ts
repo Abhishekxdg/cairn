@@ -4,6 +4,8 @@ import { statedPaths } from "./paths.js";
 import { readTasks } from "./tasks.js";
 import { readAgents } from "./agents.js";
 import { readFiles } from "./files.js";
+import { buildState } from "./snapshot.js";
+import { ageLabel } from "./staleness.js";
 
 /** Severity of a diagnostic finding. */
 export type DoctorLevel = "ok" | "warn" | "error";
@@ -95,6 +97,34 @@ export function doctor(root: string): DoctorReport {
   // Derived files freshness.
   if (!exists(paths.state)) warn("state.json missing — run `stated handoff`");
   if (!exists(paths.handoff)) warn("handoff.md missing — run `stated handoff`");
+
+  // Staleness — the rot detector. Flag any decaying fact that has gone stale so
+  // a human/agent can re-verify it or let `stated decay` clean it up.
+  try {
+    const state = buildState(root);
+    let staleCount = 0;
+    for (const t of state.activeTasks) {
+      if (t.confidence === "stale") {
+        staleCount++;
+        warn(
+          `Task "${t.title}" (${t.id}) stale — verified ${ageLabel(t.ageMs)} ago. ` +
+            `Run \`stated verify ${t.id}\` or update it.`,
+        );
+      }
+    }
+    for (const f of state.lockedFiles) {
+      if (f.confidence === "stale") {
+        staleCount++;
+        warn(
+          `Lock on ${f.path} (${f.owner}) stale — ${ageLabel(f.ageMs)} idle. ` +
+            `Run \`stated file release ${f.path}\` or \`stated decay\`.`,
+        );
+      }
+    }
+    if (staleCount === 0) ok("No stale facts");
+  } catch (e) {
+    error((e as Error).message);
+  }
 
   const healthy = !findings.some((f) => f.level === "error");
   return { healthy, findings };

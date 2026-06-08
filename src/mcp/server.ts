@@ -18,9 +18,16 @@ import {
   addDecision,
   claimFile,
   releaseFile,
+  verifyTask,
+  verifyFile,
+  getTask,
+  fileOwner,
+  applyDecay,
   readTasks,
   readAgents,
+  searchProject,
   type TaskPriority,
+  type SearchType,
 } from "../core/index.js";
 
 /**
@@ -124,6 +131,31 @@ export function createServer(): McpServer {
     async () => text(generateHandoff(resolveRoot())),
   );
 
+  // --- search_memory ---------------------------------------------------------
+  server.tool(
+    "search_memory",
+    "Keyword-search the project brain (tasks, decisions, goals) with BM25 and " +
+      "return ranked hits. Use this to pull just the relevant context instead " +
+      "of loading the whole handoff. No embeddings — deterministic results.",
+    {
+      query: z.string().describe("Search query (keywords)"),
+      type: z
+        .enum(["task", "decision", "goal"])
+        .optional()
+        .describe("Restrict results to one document type"),
+      limit: z.number().int().positive().optional().describe("Max hits (default 10)"),
+      run_id: z.string().optional().describe("Restrict results to one session/run scope"),
+    },
+    async ({ query, type, limit, run_id }) =>
+      json(
+        searchProject(resolveRoot(), query, {
+          ...(type ? { type: type as SearchType } : {}),
+          ...(limit ? { limit } : {}),
+          ...(run_id ? { run: run_id } : {}),
+        }),
+      ),
+  );
+
   // --- generate_handoff (explicit regenerate) --------------------------------
   server.tool(
     "generate_handoff",
@@ -145,9 +177,10 @@ export function createServer(): McpServer {
         .optional()
         .describe("Task priority (default: medium)"),
       owner: z.string().optional().describe("Initial owner (claims the task)"),
+      run_id: z.string().optional().describe("Session/run scope for this task"),
       actor: z.string().optional().describe("Acting agent name"),
     },
-    async ({ title, description, priority, owner, actor }) =>
+    async ({ title, description, priority, owner, run_id, actor }) =>
       json(
         addTask(
           resolveRoot(),
@@ -156,6 +189,7 @@ export function createServer(): McpServer {
             ...(description ? { description } : {}),
             ...(priority ? { priority: priority as TaskPriority } : {}),
             ...(owner ? { owner } : {}),
+            ...(run_id ? { runId: run_id } : {}),
           },
           actor,
         ),
@@ -207,9 +241,10 @@ export function createServer(): McpServer {
       decision: z.string().describe("The decision, e.g. 'Use BullMQ'"),
       reason: z.string().optional().describe("Why, e.g. 'Reliable retries'"),
       madeBy: z.string().optional().describe("Who made the decision"),
+      run_id: z.string().optional().describe("Session/run scope for this decision"),
       actor: z.string().optional().describe("Acting agent name"),
     },
-    async ({ decision, reason, madeBy, actor }) =>
+    async ({ decision, reason, madeBy, run_id, actor }) =>
       json(
         addDecision(
           resolveRoot(),
@@ -217,6 +252,7 @@ export function createServer(): McpServer {
             decision,
             ...(reason ? { reason } : {}),
             ...(madeBy ? { madeBy } : {}),
+            ...(run_id ? { runId: run_id } : {}),
           },
           actor,
         ),
@@ -259,6 +295,44 @@ export function createServer(): McpServer {
       });
       return json({ ok: true, released: removed, path });
     },
+  );
+
+  // --- verify_fact -----------------------------------------------------------
+  server.tool(
+    "verify_fact",
+    "Re-confirm a task or file lock is still accurate WITHOUT changing it. " +
+      "Resets its staleness clock so the shared state stops showing it as " +
+      "decaying. Use this when you've checked something is still current.",
+    {
+      idOrPath: z.string().describe("Task id (t_…) or repo-relative file path"),
+      actor: z.string().optional().describe("Acting agent name"),
+    },
+    async ({ idOrPath, actor }) => {
+      const root = resolveRoot();
+      if (getTask(root, idOrPath)) {
+        return json({ ok: true, kind: "task", fact: verifyTask(root, idOrPath, actor) });
+      }
+      if (fileOwner(root, idOrPath)) {
+        return json({ ok: true, kind: "file", fact: verifyFile(root, idOrPath, actor) });
+      }
+      return json({ ok: false, error: `No task or file claim matching "${idOrPath}".` });
+    },
+  );
+
+  // --- run_decay -------------------------------------------------------------
+  server.tool(
+    "run_decay",
+    "Run the project's customizable memory-decay policy: release abandoned " +
+      "locks, archive long-completed tasks, trim the event log. Dry run by " +
+      "default (returns the proposed actions); pass apply:true to perform them. " +
+      "All policies are off unless enabled in .stated/config.json.",
+    {
+      apply: z
+        .boolean()
+        .optional()
+        .describe("Perform the actions (default false = dry run)"),
+    },
+    async ({ apply }) => json(applyDecay(resolveRoot(), { apply: Boolean(apply) })),
   );
 
   // --- snapshot --------------------------------------------------------------

@@ -126,6 +126,7 @@ stated init                       Create .stated/ in the current directory
 stated status                     Show the current shared project state
 stated state                      Print machine-readable state.json
 stated handoff                    Generate & print handoff.md
+stated search <query>             Keyword-search tasks, decisions & goals (--type, --limit)
 
 stated goal add <text>            Add an active goal
 stated goal complete <query>      Mark a matching active goal completed
@@ -147,12 +148,16 @@ stated file claim <path>          Claim/lock a file (--agent <name>)
 stated file release <path>        Release a file
 stated file list                  List file ownership
 
+stated verify <id|path>           Re-confirm a task/lock is still true (resets decay)
+stated decay [--apply]            Run memory-decay policy (dry run unless --apply)
+
 stated snapshot                   Write a restore point to .stated/snapshots/
 stated doctor                     Validate .stated/ integrity
 stated mcp                        Start the MCP server (stdio)
 ```
 
-Global flags: `--agent <name>` (or `STATED_AGENT` env), `--json`, `--force`,
+Global flags: `--agent <name>` (or `STATED_AGENT` env), `--run <id>` (or
+`STATED_RUN` env, scopes tasks/decisions to a session), `--json`, `--force`,
 `--version`, `--help`.
 
 ### Example session
@@ -210,8 +215,9 @@ Stated ships an MCP server so Claude Code, Codex, Cursor, OpenHands and any othe
 MCP-compatible client can share the same project brain.
 
 **Tools:** `init_project`, `register_agent`, `get_state`, `get_handoff`,
-`generate_handoff`, `create_task`, `claim_task`, `start_task`, `complete_task`,
-`create_decision`, `claim_file`, `release_file`, `create_snapshot`.
+`generate_handoff`, `search_memory`, `create_task`, `claim_task`, `start_task`,
+`complete_task`, `create_decision`, `claim_file`, `release_file`, `verify_fact`,
+`run_decay`, `create_snapshot`.
 
 **Resources (read-only):** `stated://handoff`, `stated://state`,
 `stated://tasks`, `stated://agents`.
@@ -262,6 +268,59 @@ You can also run the dedicated binary directly: `stated-mcp`.
 3. `claim_task` / `claim_file` before working so others don't duplicate effort.
 4. `create_decision` for any durable choice.
 5. `complete_task` / `release_file` when done.
+
+---
+
+## Freshness & memory decay
+
+The most dangerous failure mode for a shared brain is going **stale and lying** —
+"Current Task: OAuth" when OAuth shipped weeks ago. Wrong structured data is worse
+than none. Stated defends against this in two layers.
+
+**Staleness signal (always on).** Every active task and file lock carries a
+`lastVerifiedAt` timestamp — set on creation, refreshed on every mutation, or
+reset explicitly with `stated verify <id|path>`. From it, Stated derives a
+`confidence` (`fresh` / `aging` / `stale`) at read time, so a fact can never be
+wrong-on-disk. It shows up everywhere:
+
+```text
+$ stated status
+  Freshness   ⚠ 1 stale
+  Active Tasks
+    [claimed]   Build OAuth t_0a63af96 @Claude Code ⚠ stale (4 weeks)
+```
+
+`handoff.md` gets a freshness banner + inline ages, `state.json` carries a
+`confidence` per fact plus a `freshness` summary, and `stated doctor` flags every
+stale fact — it's the rot detector. A stale fact **decays visibly instead of
+lying.**
+
+**Memory decay (opt-in cleanup).** When you want stale memory actually cleaned
+up, enable a decay policy in `.stated/config.json`. Everything defaults to `0`
+(off) — decay never mutates silently, only when you run `stated decay`:
+
+```json
+{
+  "staleness": {
+    "task": { "agingHours": 24, "staleHours": 168 },
+    "lock": { "agingHours": 4,  "staleHours": 24 }
+  },
+  "decay": {
+    "lockAutoReleaseHours": 0,
+    "completedTaskArchiveDays": 0,
+    "eventRetention": 0
+  }
+}
+```
+
+```bash
+stated decay            # dry run — shows what would be cleaned
+stated decay --apply    # release abandoned locks, archive old completed
+                        # tasks, trim the event log (archived to snapshots/)
+```
+
+The `staleness` thresholds also tune when facts turn `aging`/`stale`, so you can
+match the cadence of your project.
 
 ---
 

@@ -94,6 +94,24 @@ describe("CLI", () => {
     expect(JSON.parse(doctor.stdout).healthy).toBe(true);
   });
 
+  it("searches tasks, decisions and goals", async () => {
+    const p = newProject();
+    await cli(["init"], p);
+    await cli(["task", "add", "Build OAuth login flow"], p);
+    await cli(["decision", "add", "Use BullMQ for job queues"], p);
+
+    const json = await cli(["search", "oauth", "--json"], p);
+    const hits = JSON.parse(json.stdout);
+    expect(hits[0].type).toBe("task");
+    expect(hits[0].title).toContain("OAuth");
+
+    const typed = await cli(["search", "bullmq", "--type", "decision"], p);
+    expect(typed.stdout).toContain("[decision]");
+
+    const none = await cli(["search", "kubernetes"], p);
+    expect(none.stdout).toContain("no matches");
+  });
+
   it("errors helpfully when not initialized", async () => {
     const p = newProject();
     const { code, stderr } = await cli(["status"], p);
