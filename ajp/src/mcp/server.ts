@@ -6,6 +6,7 @@ import { EventStore } from "../core/store.js";
 import { agentPaths, requireRoot } from "../core/paths.js";
 import { deriveState, activeTasks, activeDecisions } from "../engines/state.js";
 import { compileContext, type ContextLevel } from "../engines/context.js";
+import { rankFiles, compileTaskContext } from "../engines/relevance.js";
 import { deriveTimeline, deriveMemory } from "../engines/memory.js";
 import { createSnapshot } from "../engines/snapshots.js";
 
@@ -90,15 +91,40 @@ export function createServer(): McpServer {
   server.tool(
     "query_context",
     "Compile the minimum-token useful context to prime an agent. Levels: " +
-      "small | medium | large | full.",
+      "small | medium | large | full. Pass `task` to scope it: the result then " +
+      "also carries the files the task most likely touches and the related " +
+      "decisions/knowledge — read those files instead of the whole repo.",
     {
       level: z
         .enum(["small", "medium", "large", "full"])
         .optional()
         .describe("Context detail level (default medium)"),
+      task: z
+        .string()
+        .optional()
+        .describe("Task description to scope context to relevant files"),
     },
-    async ({ level }) =>
-      withStore((s) => json(compileContext(s, { level: (level ?? "medium") as ContextLevel }))),
+    async ({ level, task }) =>
+      withStore((s) =>
+        json(
+          task
+            ? compileTaskContext(s, task, { level: (level ?? "medium") as ContextLevel })
+            : compileContext(s, { level: (level ?? "medium") as ContextLevel }),
+        ),
+      ),
+  );
+
+  server.tool(
+    "relevant_files",
+    "Given a task description, return the ranked set of files the task most " +
+      "likely needs — mined from commit history (intent → files). Read these " +
+      "instead of the whole repo. Deterministic; no embeddings.",
+    {
+      query: z.string().describe("Task description, e.g. 'add payment retries'"),
+      k: z.number().int().optional().describe("How many files to return (default 10)"),
+    },
+    async ({ query, k }) =>
+      withStore((s) => json(rankFiles(s, query, k !== undefined ? { k } : {}))),
   );
 
   server.tool(

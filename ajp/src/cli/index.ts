@@ -6,6 +6,9 @@ import { migrate, currentVersion, SCHEMA_VERSION } from "../core/schema.js";
 import { health, validateIntegrity, repair } from "../engines/observability.js";
 import { deriveState, activeTasks, activeDecisions, activeGoals } from "../engines/state.js";
 import { compileContext, type ContextLevel } from "../engines/context.js";
+import { rankFiles, compileTaskContext } from "../engines/relevance.js";
+import { indexRepo } from "../engines/codegraph.js";
+import { watchCode } from "../engines/codewatch.js";
 import { deriveTimeline } from "../engines/memory.js";
 import { renderTimeline } from "../engines/timeline.js";
 import { detectGit } from "../engines/git.js";
@@ -72,6 +75,10 @@ ${c.bold("COMMANDS")}
   timeline                   Human-readable timeline (--since <seq> --type T)
   recall                     Instant "where were we" (also written to .agent/CONTEXT.md)
   context [--level L]        Compile minimum-token context (small|medium|large|full)
+  context --task "<desc>"    Task-scoped context: + relevant files & related decisions
+  relevant "<task>"          Rank the files a task most likely touches (--k N --json)
+  index                      Build the static code graph (imports + exports) for cold-start
+  watch                      Live-reindex the code graph on every save (--debounce ms)
   sync                       Capture commits as events + extract decisions (--full, --no-extract)
   snapshot                   Force a state snapshot
   compact                    Cold-archive old events + reclaim space (--keep-recent N)
@@ -110,6 +117,17 @@ const commands: Record<string, Handler> = {
     const s = flags["no-agents"]
       ? { root: res.root, initializedJournal: true, filesCreated: [], filesUpdated: [], gitHook: false }
       : setupProject(cwd, { all: Boolean(flags["all"]) });
+    // Build the static code index now, so cold-start "task → files" works on the
+    // very first message — before any commit history exists. Best-effort.
+    if (!flags["no-index"]) {
+      try {
+        const store = new EventStore(agentPaths(res.root).db);
+        try {
+          const idx = indexRepo(res.root, { actor: actorOf(flags) });
+          if (idx.events.length) store.batchAppend(idx.events);
+        } finally { store.close(); }
+      } catch { /* indexing is best-effort; never block init */ }
+    }
     out(renderProjectSetup({ ...s, initializedJournal: true }));
   },
 
@@ -204,12 +222,75 @@ const commands: Record<string, Handler> = {
     } finally { store.close(); }
   },
 
-  context(_rest, flags) {
+  context(rest, flags) {
     const store = openStore();
     try {
       const level = (fstr(flags, "level") as ContextLevel) ?? "medium";
-      const ctx = compileContext(store, { level });
+      const task = (fstr(flags, "task") ?? rest.join(" ").trim()) || undefined;
+      const ctx = task
+        ? compileTaskContext(store, task, { level, ...(fstr(flags, "k") ? { k: Number(fstr(flags, "k")) } : {}) })
+        : compileContext(store, { level });
       out(JSON.stringify(ctx, null, 2));
+    } finally { store.close(); }
+  },
+
+  index(_rest, flags) {
+    const r = requireRoot();
+    const store = openStore();
+    try {
+      const res = indexRepo(r, { actor: actorOf(flags) });
+      const before = store.count();
+      if (res.events.length) store.batchAppend(res.events);
+      const added = store.count() - before;
+      if (flags["json"]) return out(JSON.stringify({ ...res, events: res.events.length, added }, null, 2));
+      out(c.green(`✔ Indexed ${res.files} files · ${res.edges} import edges · ${res.symbols} symbols`));
+      out(c.dim(added ? `  ${added} new/changed file(s) recorded` : "  index already up to date"));
+    } finally { store.close(); }
+  },
+
+  async watch(_rest, flags) {
+    const r = requireRoot();
+    const store = openStore();
+    const debounce = fstr(flags, "debounce") ? Number(fstr(flags, "debounce")) : undefined;
+    const handle = watchCode(store, r, {
+      actor: actorOf(flags),
+      ...(debounce ? { debounceMs: debounce } : {}),
+      onIndex: (path, recorded) =>
+        out(recorded ? c.green(`↻ ${path}`) : c.dim(`· ${path} (no change)`)),
+      onSkip: (path) => out(c.yellow(`⏳ ${path} (mid-edit, skipped)`)),
+    });
+    out(c.bold("ajp watch") + c.dim(` — live code-graph indexing (debounce ${debounce ?? 2500}ms). Ctrl-C to stop.`));
+    await new Promise<void>((resolve) => {
+      const stop = () => {
+        handle.close();
+        store.close();
+        out(c.dim(`\nstopped · ${handle.stats.recorded} change(s) recorded, ${handle.stats.skipped} skipped`));
+        resolve();
+      };
+      process.on("SIGINT", stop);
+      process.on("SIGTERM", stop);
+    });
+  },
+
+  relevant(rest, flags) {
+    const query = (fstr(flags, "task") ?? rest.join(" ")).trim();
+    if (!query) throw new Error('relevant requires a task description, e.g. ajp relevant "add payment retries"');
+    const store = openStore();
+    try {
+      const k = fstr(flags, "k") ? Number(fstr(flags, "k")) : 10;
+      const files = rankFiles(store, query, { k });
+      if (flags["json"]) return out(JSON.stringify(files, null, 2));
+      if (!files.length) {
+        out(c.dim("No relevant files — empty corpus? Run `ajp sync --full` to backfill git history."));
+        return;
+      }
+      out(c.bold(`\n  Relevant files for ${c.cyan(`"${query}"`)}`));
+      out("");
+      const maxLen = Math.max(...files.map((f) => f.path.length));
+      for (const f of files) {
+        out(`  ${c.green(f.score.toFixed(3))}  ${f.path.padEnd(maxLen)}  ${c.dim(f.why.slice(0, 48))}`);
+      }
+      out("");
     } finally { store.close(); }
   },
 
@@ -230,6 +311,12 @@ const commands: Record<string, Handler> = {
         full: Boolean(flags["full"]),
         extractIntent: !flags["no-extract"],
       });
+      // Re-index after capturing commits so the code graph tracks the new code.
+      // Idempotent per content (hashed event id) → only changed files append.
+      if (res.events && !flags["no-index"]) {
+        const idx = indexRepo(r, { actor: actorOf(flags) });
+        if (idx.events.length) store.batchAppend(idx.events);
+      }
       writeContextFile(store, r); // keep instant-recall file current
       if (flags["json"]) return out(JSON.stringify(res, null, 2));
       if (!res.synced) return out(c.yellow("⚠ Not a git repo — nothing to sync."));

@@ -53,6 +53,15 @@ effort only on intent:
 - \`ajp context --level small|medium|large|full\` — compact context for your prompt
 - \`ajp timeline\` — human-readable "what happened"
 
+### Before reading code — find the RIGHT files (save tokens)
+Instead of grepping blind or reading the whole repo, ask which files a task needs.
+It fuses git history (files that change together) with a static code graph
+(imports + exported symbols), so it works on a fresh repo too.
+- \`ajp relevant "<task>"\` — ranked files the task most likely touches (\`--k N\`)
+- \`ajp context --task "<task>"\` — project context + those files + related decisions
+- \`ajp index\` — (re)build the static code graph; runs on \`init\` and \`sync\` already
+- \`ajp watch\` — keep the graph fresh on every save (optional long-running)
+
 ### Rules (follow these)
 1. **Read before you write.** Read \`.agent/CONTEXT.md\` (or \`ajp recall\`) first. Do
    not create a task that already exists and is active.

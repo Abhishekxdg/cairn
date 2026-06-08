@@ -41,6 +41,7 @@ export type KnownEventType =
   | "memory.recorded"
   | "memory.archived"
   | "context.generated"
+  | "code.indexed"
   | "message.sent"
   | "message.received"
   | "snapshot.created"
@@ -212,6 +213,75 @@ export interface DerivedState {
   agents: AgentRecord[];
   ownership: Ownership[];
   knowledge: Knowledge[];
+  generatedAt: string;
+}
+
+// --- Relevance / code-understanding types ------------------------------------
+
+/**
+ * One commit folded into a (intent → files) document — the unit the file-ranker
+ * mines. `intent` is the commit message (+ any task title tagged with the
+ * commit); `tokens` is its tokenized form, cached so ranking never re-tokenizes.
+ */
+export interface CorpusDoc {
+  commit: string;
+  intent: string;
+  tokens: string[];
+  files: Array<{ path: string; owner: string; lastTouched: string }>;
+  timestamp: string;
+}
+
+/**
+ * One file's static index, projected from the latest `code.indexed` event:
+ * its language, the internal files it imports, and the symbols it exports. This
+ * is the STATIC half of code understanding — it works on a brand-new repo with
+ * zero git history, where co-occurrence has nothing to say.
+ */
+export interface CodeNode {
+  path: string;
+  lang: string;
+  /** Internal repo paths this file imports (resolved; external deps dropped). */
+  imports: string[];
+  /** Exported symbol names (function/class/const/type/default). */
+  exports: string[];
+}
+
+/** The derived code graph: nodes + reverse (imported-by) edges. */
+export interface CodeGraph {
+  nodes: Map<string, CodeNode>;
+  /** path → files that import it (reverse of `imports`). */
+  importedBy: Map<string, string[]>;
+}
+
+/** A file ranked for relevance to a task, with a human-readable reason. */
+export interface FileScore {
+  path: string;
+  /** Blended relevance score (higher = more relevant). */
+  score: number;
+  /** The commit message that best explains why this file was surfaced. */
+  why: string;
+  owner: string;
+  lastTouched: string;
+}
+
+/**
+ * Minimum useful context for a SPECIFIC task: the standard compiled context plus
+ * the ranked relevant files and the decisions/knowledge that touch the task.
+ */
+export interface TaskContext {
+  task: string;
+  projectId: string;
+  goal: string;
+  currentTask: { id: string; title: string; status: string; owner: string } | null;
+  activeTasks: Array<{ id: string; title: string; status: string; owner: string; priority: string }>;
+  activeDecisions: Array<{ id: string; title: string; rationale: string }>;
+  recentActivity: Array<{ at: string; actor: string; summary: string }>;
+  activeAgents: string[];
+  recommendedNextActions: string[];
+  relevantFiles: FileScore[];
+  relatedDecisions: Array<{ id: string; title: string; rationale: string }>;
+  relatedKnowledge: Array<{ statement: string; source: string }>;
+  asOfSeq: number;
   generatedAt: string;
 }
 
