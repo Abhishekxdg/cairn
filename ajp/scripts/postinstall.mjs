@@ -23,12 +23,25 @@ async function main() {
   const projectDir = process.env.INIT_CWD || process.cwd();
   const pkgDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-  // Global install: npm sets npm_config_global=true; there's no project to set up.
+  // Global install: wire the GLOBAL bootstrap so agents self-set-up every repo.
   if (process.env.npm_config_global === "true") {
-    process.stdout.write(
-      "\n[agent-journal-protocol] Installed globally. In a project run:\n" +
-        "  ajp setup        # create .agent/ + teach your coding agents\n\n",
-    );
+    try {
+      const { installGlobal } = await import("../dist/setup/global.js");
+      const r = installGlobal();
+      const touched = [...r.filesCreated, ...r.filesUpdated];
+      process.stdout.write(
+        "\n[agent-journal-protocol] ✔ Installed globally + wired agent bootstrap.\n" +
+          (touched.length ? `  • taught agents globally via: ${touched.join(", ")}\n` : "") +
+          "  Your agents will now run `ajp setup` automatically in any repo that\n" +
+          "  doesn't have a .agent/ journal yet. You never set up a project by hand.\n" +
+          "  Undo: `ajp uninstall-global`\n\n",
+      );
+    } catch (err) {
+      process.stdout.write(
+        "\n[agent-journal-protocol] Installed globally. Finish wiring with `ajp install-global`.\n" +
+          `  (${err && err.message ? err.message : err})\n\n`,
+      );
+    }
     return;
   }
 

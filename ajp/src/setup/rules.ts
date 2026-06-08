@@ -56,3 +56,63 @@ git-ignored automatically). Treat it like shared team memory.`;
 export function rulesBlock(): string {
   return `${BEGIN_MARKER}\n${RULES_BODY}\n${END_MARKER}\n`;
 }
+
+// --- Global bootstrap (Option A: install once, agent self-sets-up projects) --
+
+export const GLOBAL_BEGIN_MARKER =
+  "<!-- AJP-GLOBAL:BEGIN (managed by agent-journal-protocol — do not edit between markers) -->";
+export const GLOBAL_END_MARKER = "<!-- AJP-GLOBAL:END -->";
+
+/**
+ * The bootstrap rule written into a developer's GLOBAL agent instruction files
+ * (e.g. ~/.claude/CLAUDE.md). It makes every agent self-install AJP in any repo
+ * that doesn't have it yet — so the human installs once, globally, and never
+ * runs per-project setup again.
+ */
+export const GLOBAL_RULES_BODY = `## Agent Journal Protocol (AJP) — global bootstrap
+
+This machine has the \`ajp\` tool installed globally. AJP is a shared, append-only
+memory journal for AI agents, stored in a project's \`.agent/\` directory.
+
+**Whenever you begin working in a code repository:**
+1. If the command \`ajp\` is available AND no \`.agent/\` directory exists at the repo
+   root, run once: \`ajp setup\`
+   (creates the journal and writes the project's AJP rules into its agent files).
+2. Then follow that project's AJP rules — load context at session start
+   (\`ajp context --level small\`), and record what you do as events
+   (\`ajp append --type ... --payload '{...}' --actor "<you>"\`).
+
+If \`ajp\` is not installed, skip silently — do not block your work on it.`;
+
+/** The global bootstrap block including its markers. */
+export function globalRulesBlock(): string {
+  return `${GLOBAL_BEGIN_MARKER}\n${GLOBAL_RULES_BODY}\n${GLOBAL_END_MARKER}\n`;
+}
+
+/**
+ * Insert or update a marker-delimited block in `existing`, preserving everything
+ * outside the markers. Appends to the end when no block is present.
+ */
+export function upsertBetween(
+  existing: string,
+  begin: string,
+  end: string,
+  block: string,
+): { content: string; updated: boolean } {
+  const trimmed = block.trimEnd();
+  const start = existing.indexOf(begin);
+  if (start !== -1) {
+    const stop = existing.indexOf(end, start);
+    if (stop !== -1) {
+      const before = existing.slice(0, start);
+      const after = existing.slice(stop + end.length);
+      return {
+        content: (before + trimmed + after).replace(/\n{3,}/g, "\n\n"),
+        updated: true,
+      };
+    }
+  }
+  const base = existing.trimEnd();
+  const content = base ? `${base}\n\n${trimmed}\n` : `${trimmed}\n`;
+  return { content, updated: false };
+}

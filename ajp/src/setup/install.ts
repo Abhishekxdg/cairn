@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { isInitialized, findRoot } from "../core/paths.js";
 import { init } from "../core/manifest.js";
-import { BEGIN_MARKER, END_MARKER, rulesBlock } from "./rules.js";
+import { BEGIN_MARKER, END_MARKER, rulesBlock, upsertBetween } from "./rules.js";
 
 /**
  * Project setup — the one-shot that makes AJP "just work" for every coding agent
@@ -42,20 +42,7 @@ export interface SetupResult {
  * content and whether the file already had a block.
  */
 export function upsertBlock(existing: string): { content: string; updated: boolean } {
-  const block = rulesBlock().trimEnd();
-  const start = existing.indexOf(BEGIN_MARKER);
-  if (start !== -1) {
-    const end = existing.indexOf(END_MARKER, start);
-    if (end !== -1) {
-      const before = existing.slice(0, start);
-      const after = existing.slice(end + END_MARKER.length);
-      return { content: (before + block + after).replace(/\n{3,}/g, "\n\n"), updated: true };
-    }
-  }
-  // No existing block — append to the end, separated by a blank line.
-  const base = existing.trimEnd();
-  const content = base ? `${base}\n\n${block}\n` : `${block}\n`;
-  return { content, updated: false };
+  return upsertBetween(existing, BEGIN_MARKER, END_MARKER, rulesBlock());
 }
 
 /**

@@ -12,6 +12,7 @@ import { detectGit } from "../engines/git.js";
 import { pruneAgents } from "../engines/agents.js";
 import { compactJournal } from "../engines/compaction.js";
 import { setupProject } from "../setup/install.js";
+import { installGlobal, uninstallGlobal } from "../setup/global.js";
 
 const VERSION = "0.1.0";
 
@@ -60,6 +61,8 @@ ${c.bold("USAGE")}
 ${c.bold("COMMANDS")}
   init                       Create a .agent/ journal + teach coding agents
   setup                      Re-teach coding agents (writes AJP rules to their files)
+  install-global             Wire global agent rules so agents self-setup every repo
+  uninstall-global           Remove the global bootstrap rules
   status                     Show derived project state
   append --type T            Append an event (--payload '<json>' --actor N)
   state                      Print full derived state (JSON)
@@ -109,6 +112,25 @@ const commands: Record<string, Handler> = {
       if (touched.length) out(c.dim(`  taught agents via: ${touched.join(", ")}`));
     }
     out(c.dim('  Next: ajp append --type agent.registered --payload \'{"name":"Claude Code"}\''));
+  },
+
+  "install-global"(_rest, flags) {
+    const r = installGlobal({ all: Boolean(flags["all"]) });
+    if (flags["json"]) return out(JSON.stringify(r, null, 2));
+    const touched = [...r.filesCreated, ...r.filesUpdated];
+    out(c.green("✔ AJP global bootstrap installed"));
+    out(touched.length
+      ? c.dim(`  • taught agents globally via: ${touched.join(", ")}`)
+      : c.dim("  • global agent files already current"));
+    out(c.dim("  Agents will now run `ajp setup` automatically in any repo without .agent/."));
+  },
+
+  "uninstall-global"(_rest, flags) {
+    const r = uninstallGlobal();
+    if (flags["json"]) return out(JSON.stringify(r, null, 2));
+    out(r.filesUpdated.length
+      ? c.green(`✔ Removed global bootstrap from: ${r.filesUpdated.join(", ")}`)
+      : c.dim("No global bootstrap found."));
   },
 
   setup(_rest, flags) {

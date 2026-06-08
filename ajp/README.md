@@ -35,14 +35,35 @@ and write. The `.agent/` directory is to AI memory what `.git` is to source.
 - **Derivable.** Lose every cache and snapshot and you lose nothing — state
   rebuilds from history.
 
-## Install — one command, zero config
+## Install — once, globally (recommended)
+
+Install it one time on your machine; your agents set up every project for you
+after that — you never run per-project install again.
+
+```bash
+npm install -g agent-journal-protocol
+```
+
+The global `postinstall` writes a tiny **bootstrap rule** into your *global*
+agent files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, a generic
+`~/.config/ajp/AGENTS.md`, plus `~/.gemini/GEMINI.md` if present). That rule
+tells every agent:
+
+> "When you start in a repo that has no `.agent/`, run `ajp setup` first."
+
+So from now on, the **agent** creates the journal and wires the project on its
+first visit — automatically. Your own content in those global files is kept (the
+rule lives in a managed `<!-- AJP-GLOBAL:… -->` block). Undo anytime with
+`ajp uninstall-global`; re-run with `ajp install-global`.
+
+### Or: per-project install (no global)
 
 ```bash
 cd your-project
 npm install --save-dev agent-journal-protocol
 ```
 
-That's it. A `postinstall` step automatically:
+A `postinstall` step then automatically:
 
 1. **Creates the `.agent/` journal** in your project.
 2. **Teaches every coding agent how to use it** — it writes the AJP usage rules
