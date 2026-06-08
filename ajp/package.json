@@ -57,7 +57,8 @@
     "test:coverage": "AJP_COVERAGE=1 vitest run --coverage",
     "bench": "npm run build && node scripts/bench.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "ajp": "node bin/ajp.js"
+    "ajp": "node bin/ajp.js",
+    "wedge": "node scripts/wedge-eval.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
