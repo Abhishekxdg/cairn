@@ -4,7 +4,7 @@ import { writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDir, cleanupAll } from "./helpers.js";
 import { EventStore } from "../src/core/store.js";
-import { syncGit } from "../src/engines/gitsync.js";
+import { syncGit, gitDrift } from "../src/engines/gitsync.js";
 import { deriveState } from "../src/engines/state.js";
 import { setupProject, installGitHook } from "../src/setup/install.js";
 
@@ -29,6 +29,31 @@ function commit(dir: string, file: string, content: string, msg: string) {
 function store(dir: string): EventStore {
   return new EventStore(join(dir, ".agent", "journal.db"), { projectId: "git" });
 }
+
+describe("git drift (freshness signal)", () => {
+  it("is 0 right after sync and grows with each un-synced commit", () => {
+    const dir = repo();
+    commit(dir, "README.md", "# hi", "initial");
+    const s = store(dir);
+    syncGit(s, dir); // baseline at HEAD
+    expect(gitDrift(s, dir)).toBe(0);
+
+    commit(dir, "a.ts", "1", "a");
+    commit(dir, "b.ts", "2", "b");
+    expect(gitDrift(s, dir)).toBe(2); // two commits the journal hasn't captured
+
+    syncGit(s, dir); // catch up
+    expect(gitDrift(s, dir)).toBe(0);
+    s.close();
+  });
+
+  it("is 0 when there is no baseline or no git", () => {
+    const dir = repo();
+    const s = store(dir);
+    expect(gitDrift(s, dir)).toBe(0); // no baseline yet
+    s.close();
+  });
+});
 
 describe("git auto-capture", () => {
   it("baselines on first sync, then captures new commits as file events", () => {

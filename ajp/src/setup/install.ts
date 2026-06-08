@@ -58,6 +58,57 @@ export function installGitHook(root: string): boolean {
 }
 
 /**
+ * Marker embedded in the SessionStart hook command so re-running setup updates
+ * the same hook in place instead of stacking duplicates.
+ */
+const SESSION_HOOK_MARKER = "AJP:recall-inject";
+
+/**
+ * Auto-recall: install a Claude Code SessionStart hook that injects CONTEXT.md
+ * into every new session. Recall must be INVOLUNTARY — the whole token saving
+ * only happens if the agent reads CONTEXT.md without being told, in every tool.
+ * The git rules cover Claude's CLAUDE.md bootstrap, but a SessionStart hook makes
+ * it fire deterministically. The hook's stdout becomes the session's context.
+ *
+ * Merges into `.claude/settings.json`, preserving existing settings and other
+ * hooks. Idempotent via SESSION_HOOK_MARKER. Returns true if written.
+ */
+export function installSessionHook(root: string): boolean {
+  const dir = join(root, ".claude");
+  const file = join(dir, "settings.json");
+  // The command prints CONTEXT.md if present; the marker makes it self-identifying.
+  const command = `# ${SESSION_HOOK_MARKER}\n[ -f "${join(root, ".agent", "CONTEXT.md")}" ] && cat "${join(root, ".agent", "CONTEXT.md")}" || true`;
+
+  let settings: any = {};
+  if (existsSync(file)) {
+    try {
+      settings = JSON.parse(readFileSync(file, "utf8")) || {};
+    } catch {
+      return false; // don't clobber a settings file we can't parse
+    }
+  }
+  settings.hooks = settings.hooks ?? {};
+  const list: any[] = Array.isArray(settings.hooks.SessionStart)
+    ? settings.hooks.SessionStart
+    : [];
+  // Drop any prior AJP entry, then add a fresh one.
+  const cleaned = list.filter(
+    (g) =>
+      !(
+        g &&
+        Array.isArray(g.hooks) &&
+        g.hooks.some((h: any) => typeof h?.command === "string" && h.command.includes(SESSION_HOOK_MARKER))
+      ),
+  );
+  cleaned.push({ hooks: [{ type: "command", command }] });
+  settings.hooks.SessionStart = cleaned;
+
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
+  return true;
+}
+
+/**
  * Project setup — the one-shot that makes AJP "just work" for every coding agent
  * without MCP.
  *
@@ -90,6 +141,8 @@ export interface SetupResult {
   filesUpdated: string[];
   /** Whether a git post-commit auto-capture hook was installed. */
   gitHook: boolean;
+  /** Whether a Claude Code SessionStart auto-recall hook was installed. */
+  sessionHook: boolean;
 }
 
 /**
@@ -112,7 +165,7 @@ export function upsertBlock(
  */
 export function setupProject(
   root: string,
-  opts: { all?: boolean; gitHook?: boolean } = {},
+  opts: { all?: boolean; gitHook?: boolean; sessionHook?: boolean } = {},
 ): SetupResult {
   const filesCreated: string[] = [];
   const filesUpdated: string[] = [];
@@ -161,11 +214,19 @@ export function setupProject(
     }
   }
 
+  // 5. Auto-recall: install the SessionStart hook so CONTEXT.md is injected into
+  //    every Claude Code session without the agent having to ask for it.
+  let sessionHook = false;
+  if (opts.sessionHook !== false) {
+    sessionHook = installSessionHook(root);
+  }
+
   return {
     root: findRoot(root) ?? root,
     initializedJournal,
     filesCreated,
     filesUpdated,
     gitHook,
+    sessionHook,
   };
 }

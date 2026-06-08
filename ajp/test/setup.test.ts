@@ -1,8 +1,8 @@
 import { describe, it, expect, afterAll } from "vitest";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tempDir, cleanupAll } from "./helpers.js";
-import { setupProject, upsertBlock, AGENT_FILES } from "../src/setup/install.js";
+import { setupProject, upsertBlock, AGENT_FILES, installSessionHook } from "../src/setup/install.js";
 import { BEGIN_MARKER, END_MARKER } from "../src/setup/rules.js";
 
 afterAll(cleanupAll);
@@ -64,6 +64,34 @@ describe("project setup (auto-install for agents)", () => {
     expect(content).toContain("## Footer");
     expect(content).not.toContain("OLD RULES");
     expect(content.split(BEGIN_MARKER).length - 1).toBe(1);
+  });
+
+  it("installs an auto-recall SessionStart hook into .claude/settings.json", () => {
+    const dir = tempDir();
+    const r = setupProject(dir);
+    expect(r.sessionHook).toBe(true);
+    const settings = JSON.parse(readFileSync(join(dir, ".claude", "settings.json"), "utf8"));
+    const cmds = settings.hooks.SessionStart.flatMap((g: any) => g.hooks.map((h: any) => h.command));
+    expect(cmds.some((c: string) => c.includes("AJP:recall-inject"))).toBe(true);
+    expect(cmds.some((c: string) => c.includes("CONTEXT.md"))).toBe(true);
+  });
+
+  it("session hook merge is idempotent and preserves existing settings", () => {
+    const dir = tempDir();
+    const dotClaude = join(dir, ".claude");
+    mkdirSync(dotClaude, { recursive: true });
+    // Pre-existing user settings + an unrelated SessionStart hook.
+    writeFileSync(
+      join(dotClaude, "settings.json"),
+      JSON.stringify({ model: "opus", hooks: { SessionStart: [{ hooks: [{ type: "command", command: "echo hi" }] }] } }, null, 2),
+    );
+    installSessionHook(dir);
+    installSessionHook(dir); // twice → still one AJP entry
+    const s = JSON.parse(readFileSync(join(dotClaude, "settings.json"), "utf8"));
+    expect(s.model).toBe("opus"); // unrelated setting preserved
+    const cmds = s.hooks.SessionStart.flatMap((g: any) => g.hooks.map((h: any) => h.command));
+    expect(cmds.filter((c: string) => c.includes("AJP:recall-inject")).length).toBe(1);
+    expect(cmds.some((c: string) => c === "echo hi")).toBe(true); // user hook kept
   });
 
   it("covers the known agent ecosystem", () => {

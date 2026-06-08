@@ -14,7 +14,7 @@ import { renderTimeline } from "../engines/timeline.js";
 import { detectGit } from "../engines/git.js";
 import { pruneAgents } from "../engines/agents.js";
 import { compactJournal } from "../engines/compaction.js";
-import { syncGit } from "../engines/gitsync.js";
+import { syncGit, gitDrift } from "../engines/gitsync.js";
 import { writeContextFile, renderRecall } from "../engines/recall.js";
 import { setupProject } from "../setup/install.js";
 import { installGlobal, uninstallGlobal } from "../setup/global.js";
@@ -115,7 +115,7 @@ const commands: Record<string, Handler> = {
     });
     // Teach the coding agents (unless --no-agents), then show the nice screen.
     const s = flags["no-agents"]
-      ? { root: res.root, initializedJournal: true, filesCreated: [], filesUpdated: [], gitHook: false }
+      ? { root: res.root, initializedJournal: true, filesCreated: [], filesUpdated: [], gitHook: false, sessionHook: false }
       : setupProject(cwd, { all: Boolean(flags["all"]) });
     // Build the static code index now, so cold-start "task → files" works on the
     // very first message — before any commit history exists. Best-effort.
@@ -298,8 +298,9 @@ const commands: Record<string, Handler> = {
     const r = requireRoot();
     const store = openStore();
     try {
-      const ctx = writeContextFile(store, r); // refresh + return
-      out(flags["json"] ? JSON.stringify(ctx, null, 2) : renderRecall(ctx));
+      const driftCommits = gitDrift(store, r); // commits since the journal last synced
+      const ctx = writeContextFile(store, r, { driftCommits }); // refresh + return
+      out(flags["json"] ? JSON.stringify(ctx, null, 2) : renderRecall(ctx, { driftCommits }));
     } finally { store.close(); }
   },
 

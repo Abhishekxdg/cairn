@@ -34,6 +34,25 @@ describe("context compiler", () => {
     expect(compileContext(s, { level: "medium" }).activeTasks.length).toBe(8);
     expect(compileContext(s, { level: "full" }).activeTasks.length).toBe(30);
   });
+
+  it("surfaces a relevant OLD fact over fresh noise (relevance > recency)", () => {
+    const s = memStore();
+    s.appendEvent({ type: "goal.created", payload: { id: "g1", title: "Ship OAuth login" } });
+    s.appendEvent({ type: "task.created", payload: { id: "t2", title: "Build /auth/google route", priority: "high" } });
+    s.appendEvent({ type: "task.started", payload: { id: "t2" } });
+    // The high-value fact, planted EARLY.
+    s.appendEvent({
+      type: "knowledge.learned",
+      payload: { statement: "Google OAuth requires the redirect URI to be allowlisted in the Google console" },
+    });
+    // Bury it under fresh, irrelevant chatter.
+    for (let i = 0; i < 20; i++) {
+      s.appendEvent({ type: "knowledge.learned", payload: { statement: `unrelated note ${i} about formatting and whitespace` } });
+    }
+    const ctx = compileContext(s, { level: "small" }); // activity cap = 5
+    const surfaced = ctx.recentActivity.some((e) => e.summary.includes("redirect URI"));
+    expect(surfaced).toBe(true); // recency alone would have dropped it
+  });
 });
 
 describe("timeline", () => {

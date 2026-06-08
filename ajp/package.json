@@ -58,7 +58,8 @@
     "bench": "npm run build && node scripts/bench.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "ajp": "node bin/ajp.js",
-    "wedge": "node scripts/wedge-eval.mjs"
+    "wedge": "node scripts/wedge-eval.mjs",
+    "wedge:tokens": "npm run build && node scripts/wedge-tokens.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",

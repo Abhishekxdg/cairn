@@ -2,6 +2,7 @@ import type { EventStore } from "../core/store.js";
 import type { DerivedState, Task } from "../core/types.js";
 import { deriveState, activeTasks, activeDecisions, activeGoals } from "./state.js";
 import { timelineEntries, type TimelineEntry } from "./timeline.js";
+import { tokenize } from "./relevance.js";
 
 /**
  * Context compiler — the flagship.
@@ -20,7 +21,7 @@ export interface CompiledContext {
   goal: string;
   currentTask: { id: string; title: string; status: string; owner: string } | null;
   activeTasks: Array<{ id: string; title: string; status: string; owner: string; priority: string }>;
-  activeDecisions: Array<{ id: string; title: string; rationale: string }>;
+  activeDecisions: Array<{ id: string; title: string; rationale: string; at: string }>;
   recentActivity: Array<{ at: string; actor: string; summary: string }>;
   activeAgents: string[];
   recommendedNextActions: string[];
@@ -65,6 +66,34 @@ function rankTasks(tasks: Task[]): Task[] {
   });
 }
 
+/**
+ * Order recent activity by RELEVANCE to what the agent is doing, not just
+ * recency. At scale, a critical old fact (e.g. "redirect URI must be allowlisted")
+ * falls off a recency tail while fresh noise stays — exactly backwards for
+ * orientation. We score each entry by token-overlap with the orientation query
+ * (goal + current task + decisions) and blend with recency so a highly relevant
+ * old fact can outrank fresh chatter, while ties break toward newest.
+ *
+ * `entries` is newest-first. Falls back to pure recency when there's no query.
+ */
+function rankActivity(entries: TimelineEntry[], query: string, limit: number): TimelineEntry[] {
+  const cap = Number.isFinite(limit) ? limit : entries.length;
+  const q = new Set(tokenize(query));
+  if (q.size === 0 || entries.length === 0) return entries.slice(0, cap);
+  const n = entries.length;
+  const scored = entries.map((e, i) => {
+    const toks = tokenize(e.summary);
+    let overlap = 0;
+    for (const t of toks) if (q.has(t)) overlap++;
+    // Normalize by sqrt(len) so long summaries don't win on volume alone.
+    const rel = toks.length ? overlap / Math.sqrt(toks.length) : 0;
+    const recency = (n - i) / n; // newest → ~1, oldest → ~0
+    return { e, i, score: rel * 2 + recency };
+  });
+  scored.sort((a, b) => b.score - a.score || a.i - b.i);
+  return scored.slice(0, cap).map((s) => s.e);
+}
+
 /** Heuristic next actions from the current task board — no model involved. */
 function nextActions(state: DerivedState): string[] {
   const out: string[] = [];
@@ -101,14 +130,22 @@ export function compileContext(
   const ranked = rankTasks(activeTasks(state));
   const current = ranked.find((t) => t.status === "active") ?? ranked[0] ?? null;
 
-  // Recent activity from the tail of the journal (newest first → oldest).
-  const recentEvents = store.queryEvents({
-    order: "desc",
-    limit: Number.isFinite(limit.activity) ? limit.activity : 100,
-  });
-  const recent: TimelineEntry[] = timelineEntries(recentEvents);
-
   const goal = activeGoals(state)[0]?.title ?? "";
+
+  // Pull a WIDER window than we'll keep, then rank by relevance to the current
+  // work so a critical old fact can survive over fresh noise (not pure recency).
+  const window = Math.max(Number.isFinite(limit.activity) ? limit.activity * 6 : 100, 30);
+  const recentEvents = store.queryEvents({ order: "desc", limit: window });
+  const orientationQuery = [
+    goal,
+    current?.title ?? "",
+    ...activeDecisions(state).map((d) => `${d.title} ${d.rationale}`),
+  ].join(" ");
+  const recent: TimelineEntry[] = rankActivity(
+    timelineEntries(recentEvents),
+    orientationQuery,
+    limit.activity,
+  );
 
   return {
     level,
@@ -128,7 +165,7 @@ export function compileContext(
       })),
     activeDecisions: activeDecisions(state)
       .slice(0, Number.isFinite(limit.decisions) ? limit.decisions : undefined)
-      .map((d) => ({ id: d.id, title: d.title, rationale: d.rationale })),
+      .map((d) => ({ id: d.id, title: d.title, rationale: d.rationale, at: d.createdAt })),
     recentActivity: recent.map((e) => ({
       at: e.timestamp,
       actor: e.actor,
@@ -139,6 +176,8 @@ export function compileContext(
       .map((a) => a.name),
     recommendedNextActions: nextActions(state),
     asOfSeq: state.lastSeq,
-    generatedAt: state.generatedAt,
+    // Honor an explicit `now` so relative ages are deterministic (and testable);
+    // otherwise use the state's stamp (real wall-clock).
+    generatedAt: opts.now ? new Date(opts.now).toISOString() : state.generatedAt,
   };
 }

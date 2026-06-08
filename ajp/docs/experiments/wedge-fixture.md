@@ -55,6 +55,43 @@ tasks. **Wedge validated** if Treatment beats Control by ≥1.5 points (of 5) on
 **≥3 of the 4 agents**. If not, the orientation content — not the plumbing — is
 what needs work (which facts `CONTEXT.md` surfaces, and how it ranks them).
 
+## Recorded run — 2026-06-09 (blind fixture)
+
+The original fixture leaked intent through **code comments** (`server.ts`: "DONE
+do not rebuild"; `auth.ts`: "Google OAuth", "implement /auth/google (start
+here)"). That fed a cold agent 4 of the 5 answer-key facts, so control and
+treatment scored the same — the comments did the journal's job. First lesson:
+**a fair control needs neutral code.**
+
+A **blind variant** was built (`scripts/wedge-fixture-blind.mjs`): identical
+planted journal, but the code reveals nothing — generic `authRoute()` stub, no
+"do not rebuild", README is deliberate misdirection ("transactional email API").
+All intent lives only in `CONTEXT.md`. Control was run with `.agent/` moved
+completely out of the folder (renaming to `_agent_hidden` was NOT enough — agents
+actively dig up renamed memory dirs; that contaminated an earlier run).
+
+Result, single task (`t2`), n=1 per arm:
+
+| Axis | Control (no journal) | Treatment (journal) |
+|---|---|---|
+| Right goal (OAuth login) | ✗ built API-key bearer auth | ✓ |
+| Used Google | ✗ | ✓ |
+| Avoided rebuilding server | ✗ refactored the "done" server | ✓ mounted route only |
+| Targeted `/auth/google` | ✗ built `/auth/verify` | ✓ |
+| Redirect-URI gotcha | ✗ | ~ partial |
+| **Score (0–5)** | **0** | **4.5** |
+| **Wall-clock** | **3m 24s** | **1m 56s** |
+| Effort | MORE (split app/config, Vitest 3 tests) — all wasted | less, correct |
+
+Two independent wins from one file: **correctness** (0 → 4.5) and **speed**
+(~1.7× faster). The cold agent produced *more polished* code (passing tests,
+clean refactor) in the *wrong direction* — confident, tested, wrong. It also
+spent its extra time on cold-start reconstruction (ran an `analyze-project`
+repo scan to "regain context").
+
+Caveats: n=1, one task, one model per arm; treatment carried the redirect-URI
+fact but didn't surface it (reading ≠ fully using). Directional, not a study.
+
 ## Why this fixture is fair
 
 - The traps are reachable from the code alone (a cold agent isn't being set up to

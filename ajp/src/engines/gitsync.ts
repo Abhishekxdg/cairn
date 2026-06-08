@@ -30,6 +30,26 @@ function git(root: string, args: string[]): string {
   }).toString();
 }
 
+/**
+ * Freshness signal: how many commits git HEAD is ahead of what the journal last
+ * captured. 0 means CONTEXT.md is current; >0 means commits landed without a
+ * sync (so the recalled context may be stale). Best-effort — returns 0 if git is
+ * unavailable or the journal has no baseline yet.
+ */
+export function gitDrift(store: EventStore, root: string): number {
+  try {
+    if (!detectGit(root).isRepo) return 0;
+    const last = store.getMeta(META_LAST) ?? null;
+    if (!last) return 0;
+    const head = git(root, ["rev-parse", "HEAD"]).trim();
+    if (!head || head === last) return 0;
+    const n = git(root, ["rev-list", "--count", `${last}..HEAD`]).trim();
+    return Number.parseInt(n, 10) || 0;
+  } catch {
+    return 0;
+  }
+}
+
 export interface GitSyncResult {
   synced: boolean;
   commits: number;
