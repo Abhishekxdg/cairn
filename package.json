@@ -1,6 +1,6 @@
 {
   "name": "@memxai/cairn",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Cairn — an append-only journal for AI agents. Git-like memory, without the complexity.",
   "publishConfig": {
     "access": "public"
@@ -42,10 +42,11 @@
   "files": [
     "dist",
     "bin",
-    "scripts",
+    "scripts/postinstall.mjs",
     "README.md",
     "docs",
-    "LICENSE"
+    "LICENSE",
+    "!dist/**/*.map"
   ],
   "engines": {
     "node": ">=18"
