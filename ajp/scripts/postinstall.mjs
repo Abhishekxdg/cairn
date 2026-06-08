@@ -27,15 +27,8 @@ async function main() {
   if (process.env.npm_config_global === "true") {
     try {
       const { installGlobal } = await import("../dist/setup/global.js");
-      const r = installGlobal();
-      const touched = [...r.filesCreated, ...r.filesUpdated];
-      process.stdout.write(
-        "\n[agent-journal-protocol] ✔ Installed globally + wired agent bootstrap.\n" +
-          (touched.length ? `  • taught agents globally via: ${touched.join(", ")}\n` : "") +
-          "  Your agents will now run `ajp setup` automatically in any repo that\n" +
-          "  doesn't have a .agent/ journal yet. You never set up a project by hand.\n" +
-          "  Undo: `ajp uninstall-global`\n\n",
-      );
+      const { renderGlobalSetup } = await import("../dist/cli/screens.js");
+      process.stdout.write("\n" + renderGlobalSetup(installGlobal()) + "\n");
     } catch (err) {
       process.stdout.write(
         "\n[agent-journal-protocol] Installed globally. Finish wiring with `ajp install-global`.\n" +
@@ -51,15 +44,8 @@ async function main() {
 
   try {
     const { setupProject } = await import("../dist/setup/install.js");
-    const r = setupProject(projectDir);
-    const touched = [...r.filesCreated, ...r.filesUpdated];
-    process.stdout.write(
-      "\n[agent-journal-protocol] ✔ Set up shared agent memory.\n" +
-        (r.initializedJournal ? "  • created .agent/ journal\n" : "  • .agent/ journal present\n") +
-        (touched.length ? `  • taught agents via: ${touched.join(", ")}\n` : "") +
-        "  Your coding agents will now read/write the journal with the `ajp` CLI.\n" +
-        "  Re-run anytime: `ajp setup`  ·  opt out: AJP_NO_POSTINSTALL=1\n\n",
-    );
+    const { renderProjectSetup } = await import("../dist/cli/screens.js");
+    process.stdout.write("\n" + renderProjectSetup(setupProject(projectDir)) + "\n");
   } catch (err) {
     // Never break `npm install`.
     process.stdout.write(

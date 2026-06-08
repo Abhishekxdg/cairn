@@ -32,7 +32,7 @@ describe("ajp CLI", () => {
 
   it("init → append → status → state", async () => {
     const dir = tempDir();
-    expect((await cli(["init"], dir)).stdout).toContain("Initialized");
+    expect((await cli(["init"], dir)).stdout).toContain("created shared memory");
     await cli(["append", "--type", "agent.registered", "--payload", '{"name":"Claude Code"}', "--actor", "Claude Code"], dir);
     await cli(["append", "--type", "goal.created", "--payload", '{"id":"g1","title":"Launch"}'], dir);
     await cli(["append", "--type", "task.created", "--payload", '{"id":"t1","title":"OAuth","priority":"high"}'], dir);

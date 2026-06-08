@@ -13,6 +13,7 @@ import { pruneAgents } from "../engines/agents.js";
 import { compactJournal } from "../engines/compaction.js";
 import { setupProject } from "../setup/install.js";
 import { installGlobal, uninstallGlobal } from "../setup/global.js";
+import { renderProjectSetup, renderGlobalSetup } from "./screens.js";
 
 const VERSION = "0.1.0";
 
@@ -101,28 +102,17 @@ const commands: Record<string, Handler> = {
       ...(fstr(flags, "name") ? { name: fstr(flags, "name")! } : {}),
       force: Boolean(flags["force"]),
     });
-    out(c.green("✔ Initialized Agent Journal at .agent/"));
-    out(c.dim(`  projectId: ${res.projectId}`));
-    const git = detectGit(cwd);
-    if (git.isRepo) out(c.dim(`  git: ${git.branch ?? "(detached)"}`));
-    // Also teach the coding agents (unless --no-agents).
-    if (!flags["no-agents"]) {
-      const s = setupProject(cwd, { all: Boolean(flags["all"]) });
-      const touched = [...s.filesCreated, ...s.filesUpdated];
-      if (touched.length) out(c.dim(`  taught agents via: ${touched.join(", ")}`));
-    }
-    out(c.dim('  Next: ajp append --type agent.registered --payload \'{"name":"Claude Code"}\''));
+    // Teach the coding agents (unless --no-agents), then show the nice screen.
+    const s = flags["no-agents"]
+      ? { root: res.root, initializedJournal: true, filesCreated: [], filesUpdated: [] }
+      : setupProject(cwd, { all: Boolean(flags["all"]) });
+    out(renderProjectSetup({ ...s, initializedJournal: true }));
   },
 
   "install-global"(_rest, flags) {
     const r = installGlobal({ all: Boolean(flags["all"]) });
     if (flags["json"]) return out(JSON.stringify(r, null, 2));
-    const touched = [...r.filesCreated, ...r.filesUpdated];
-    out(c.green("✔ AJP global bootstrap installed"));
-    out(touched.length
-      ? c.dim(`  • taught agents globally via: ${touched.join(", ")}`)
-      : c.dim("  • global agent files already current"));
-    out(c.dim("  Agents will now run `ajp setup` automatically in any repo without .agent/."));
+    out(renderGlobalSetup(r));
   },
 
   "uninstall-global"(_rest, flags) {
@@ -137,12 +127,7 @@ const commands: Record<string, Handler> = {
     const cwd = process.cwd();
     const r = setupProject(cwd, { all: Boolean(flags["all"]) });
     if (flags["json"]) return out(JSON.stringify(r, null, 2));
-    out(c.green("✔ AJP set up for this project"));
-    out(c.dim(r.initializedJournal ? "  • created .agent/ journal" : "  • .agent/ journal present"));
-    const touched = [...r.filesCreated, ...r.filesUpdated];
-    out(touched.length
-      ? c.dim(`  • taught agents via: ${touched.join(", ")}`)
-      : c.dim("  • agent instruction files already current"));
+    out(renderProjectSetup(r));
   },
 
   status(_rest, flags) {

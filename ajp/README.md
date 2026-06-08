@@ -44,6 +44,31 @@ after that — you never run per-project install again.
 npm install -g agent-journal-protocol
 ```
 
+You're greeted with a graphical setup (truecolor banner + boxes in a real
+terminal; clean plain text when piped):
+
+```text
+  █████╗      ██╗██████╗
+ ██╔══██╗     ██║██╔══██╗
+ ███████║     ██║██████╔╝
+ ██╔══██║██   ██║██╔═══╝
+ ██║  ██║╚█████╔╝██║
+ ╚═╝  ╚═╝ ╚════╝ ╚═╝
+  Agent Journal Protocol  ·  the Git of AI memory
+
+  ╭─ Installed globally ───────────────────────────────────╮
+  │ ✓ taught all agents      ~/.config/ajp/AGENTS.md       │
+  │ ✓ taught Claude Code     ~/.claude/CLAUDE.md           │
+  ╰────────────────────────────────────────────────────────╯
+
+  ╭─ What happens now ──────────────────────────────────────╮
+  │ Installed once — you never set up a project again.      │
+  │                                                         │
+  │ When an agent opens any repo without a journal, it will │
+  │ run ajp setup itself and start recording.               │
+  ╰─────────────────────────────────────────────────────────╯
+```
+
 The global `postinstall` writes a tiny **bootstrap rule** into your *global*
 agent files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, a generic
 `~/.config/ajp/AGENTS.md`, plus `~/.gemini/GEMINI.md` if present). That rule
