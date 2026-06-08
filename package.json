@@ -6,8 +6,8 @@
     "access": "public"
   },
   "type": "module",
-  "license": "MIT",
-  "author": "Cairn contributors",
+  "license": "UNLICENSED",
+  "author": "memxai",
   "keywords": [
     "ai",
     "agents",

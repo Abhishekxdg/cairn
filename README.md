@@ -2,7 +2,7 @@
 
 **An append-only journal for AI agents. Git-like memory, without the complexity.**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](package.json)
 [![npm](https://img.shields.io/badge/npm-%40memxai%2Fcairn-red.svg)](https://www.npmjs.com/package/@memxai/cairn)
 
@@ -180,4 +180,6 @@ See [ARCHITECTURE.md](docs/ARCHITECTURE.md) · [PROTOCOL.md](docs/PROTOCOL.md) �
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Proprietary — © 2026 memxai. All rights reserved. Installing the package grants a
+limited right to run it for internal use only; no source rights. See
+[LICENSE](LICENSE).
