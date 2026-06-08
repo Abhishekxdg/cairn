@@ -32,6 +32,7 @@ export type KnownEventType =
   | "file.created"
   | "file.modified"
   | "file.deleted"
+  | "git.commit"
   | "artifact.created"
   | "artifact.updated"
   | "artifact.deleted"

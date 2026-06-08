@@ -33,6 +33,7 @@ export * from "./engines/observability.js";
 export * from "./engines/git.js";
 export * from "./engines/agents.js";
 export * from "./engines/compaction.js";
+export * from "./engines/gitsync.js";
 export * from "./setup/install.js";
 export * from "./setup/global.js";
 export { RULES_BODY, rulesBlock, GLOBAL_RULES_BODY, globalRulesBlock } from "./setup/rules.js";

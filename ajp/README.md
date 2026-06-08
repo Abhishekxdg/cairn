@@ -218,8 +218,26 @@ See [MCP.md](docs/MCP.md).
 ## CLI
 
 ```text
-ajp init | status | append | state | timeline | context | snapshot
+ajp init | status | append | state | timeline | context | sync | snapshot
         | compact | prune | export | doctor | migrate | repair | mcp
+```
+
+### Git auto-capture (zero agent effort)
+
+The hardest part of any agent-memory system is getting accurate data *in*. AJP
+solves it by reading git instead of asking agents to hand-narrate file edits:
+
+- `ajp setup` installs a git **post-commit hook** that runs `ajp sync`.
+- Every commit becomes `file.created` / `file.modified` / `file.deleted` events
+  plus a `git.commit` record, **attributed to the commit author**, derived
+  deterministically (idempotent — re-syncing never duplicates).
+- So even if an agent logs nothing, the journal still knows what changed, who
+  changed it, and when — because git does. Agents only record **intent** git
+  can't know: goals, decisions (with reasons), knowledge, and task lifecycle.
+
+```bash
+ajp sync            # capture commits since the last sync (the hook does this for you)
+ajp sync --full     # on first run, capture the entire history
 ```
 
 - `ajp compact [--keep-recent N]` — cold-archive old events behind a snapshot so

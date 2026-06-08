@@ -49,6 +49,9 @@ export function renderProjectSetup(r: SetupResult): string {
   if (r.filesCreated.length + r.filesUpdated.length === 0) {
     lines.push(style.dim("agents already up to date"));
   }
+  if (r.gitHook) {
+    lines.push(step("git auto-capture".padEnd(26), "post-commit hook"));
+  }
 
   const next = box(
     "What happens now",

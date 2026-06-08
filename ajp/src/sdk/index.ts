@@ -41,6 +41,7 @@ import {
 import { detectGit, gitCorrelation, type GitInfo } from "../engines/git.js";
 import { pruneAgents, staleAgents, type PruneReport } from "../engines/agents.js";
 import { compactJournal, type CompactionReport } from "../engines/compaction.js";
+import { syncGit, type GitSyncResult } from "../engines/gitsync.js";
 
 /**
  * AgentJournal — the high-level TypeScript SDK.
@@ -252,6 +253,14 @@ export class AgentJournal {
   /** Cold-archive old events behind a snapshot to keep the hot table small. */
   compactJournal(opts: { keepRecent?: number } = {}): CompactionReport {
     return compactJournal(this.db, opts);
+  }
+
+  /**
+   * Auto-capture file events from git history (zero agent effort). Idempotent;
+   * typically wired to a git post-commit hook by `ajp setup`.
+   */
+  sync(opts: { full?: boolean } = {}): GitSyncResult {
+    return syncGit(this.db, this.dbPath ? this.cwd : this.root, opts);
   }
 
   health(): HealthMetrics {

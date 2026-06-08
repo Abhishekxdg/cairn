@@ -22,14 +22,16 @@ survives across sessions and so other agents never duplicate or undo your work.
 2. Announce yourself (use YOUR name as the actor everywhere):
    \`ajp append --type agent.registered --payload '{"name":"<you>"}' --actor "<you>"\`
 
-### As you work, record each real action as one event
+### As you work, record INTENT — the things git cannot know
+You do NOT need to log file edits: AJP captures \`file.created/modified/deleted\`
+automatically from git commits (a post-commit hook runs \`ajp sync\`). Spend your
+effort only on intent:
 - Create a task:  \`ajp append --type task.created   --payload '{"id":"t1","title":"...","priority":"high"}' --actor "<you>"\`
 - Start a task:   \`ajp append --type task.started   --payload '{"id":"t1"}' --actor "<you>"\`
 - Finish a task:  \`ajp append --type task.completed --payload '{"id":"t1"}' --actor "<you>"\`
 - Block a task:   \`ajp append --type task.blocked   --payload '{"id":"t1","reason":"..."}' --actor "<you>"\`
 - Record a decision (with a reason): \`ajp append --type decision.made --payload '{"id":"d1","title":"Use X","rationale":"why"}' --actor "<you>"\`
 - Learn a durable fact: \`ajp append --type knowledge.learned --payload '{"statement":"..."}' --actor "<you>"\`
-- Note a file you changed: \`ajp append --type file.modified --payload '{"path":"src/..."}' --actor "<you>"\`
 
 ### Reading the journal anytime
 - \`ajp status\`   — current goal, active tasks, decisions, agents
@@ -44,6 +46,7 @@ survives across sessions and so other agents never duplicate or undo your work.
 3. **One event per real action.** Keep payloads small and factual.
 4. **Never edit \`.agent/\` by hand.** It is append-only; history is the source of
    truth. To change something, append a new event.
+   (File changes are captured from git automatically — don't log them yourself.)
 5. **Supersede, don't contradict.** When a new decision replaces an old one, use
    \`decision.made\` with \`"supersedes":"<oldId>"\` so consumers see one active answer.
 6. **Always pass \`--actor "<your name>"\`** so the journal knows who did what.

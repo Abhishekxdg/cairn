@@ -11,6 +11,9 @@ implementation is a complete vertical slice; the items below deepen it.
   knowledge) with task & decision lifecycles.
 - Snapshot engine (auto every 100 events / 5 min; snapshot+tail derivation).
 - Context compiler (small/medium/large/full), timeline engine, memory layer.
+- **Git auto-capture** (`ajp sync` + post-commit hook): file events derived
+  deterministically from commits, attributed to authors — accurate journal with
+  zero agent effort. Agents record only intent (goals/decisions/knowledge/tasks).
 - Cold-archive compaction (`events_archive`): move pre-snapshot events out of the
   hot table — events stay in the journal, derivation/export/replay unaffected.
 - Automatic agent pruning + stale detection (`ajp prune`).

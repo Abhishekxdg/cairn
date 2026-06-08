@@ -11,6 +11,7 @@ import { renderTimeline } from "../engines/timeline.js";
 import { detectGit } from "../engines/git.js";
 import { pruneAgents } from "../engines/agents.js";
 import { compactJournal } from "../engines/compaction.js";
+import { syncGit } from "../engines/gitsync.js";
 import { setupProject } from "../setup/install.js";
 import { installGlobal, uninstallGlobal } from "../setup/global.js";
 import { renderProjectSetup, renderGlobalSetup } from "./screens.js";
@@ -69,6 +70,7 @@ ${c.bold("COMMANDS")}
   state                      Print full derived state (JSON)
   timeline                   Human-readable timeline (--since <seq> --type T)
   context [--level L]        Compile minimum-token context (small|medium|large|full)
+  sync                       Auto-capture file events from git history (--full)
   snapshot                   Force a state snapshot
   compact                    Cold-archive old events + reclaim space (--keep-recent N)
   prune                      Disconnect stale agents (--idle-ms N)
@@ -104,7 +106,7 @@ const commands: Record<string, Handler> = {
     });
     // Teach the coding agents (unless --no-agents), then show the nice screen.
     const s = flags["no-agents"]
-      ? { root: res.root, initializedJournal: true, filesCreated: [], filesUpdated: [] }
+      ? { root: res.root, initializedJournal: true, filesCreated: [], filesUpdated: [], gitHook: false }
       : setupProject(cwd, { all: Boolean(flags["all"]) });
     out(renderProjectSetup({ ...s, initializedJournal: true }));
   },
@@ -206,6 +208,21 @@ const commands: Record<string, Handler> = {
       const level = (fstr(flags, "level") as ContextLevel) ?? "medium";
       const ctx = compileContext(store, { level });
       out(JSON.stringify(ctx, null, 2));
+    } finally { store.close(); }
+  },
+
+  sync(_rest, flags) {
+    const r = requireRoot();
+    const store = openStore();
+    try {
+      const res = syncGit(store, r, { full: Boolean(flags["full"]) });
+      if (flags["json"]) return out(JSON.stringify(res, null, 2));
+      if (!res.synced) return out(c.yellow("⚠ Not a git repo — nothing to sync."));
+      out(res.events
+        ? c.green(`✔ Captured ${res.commits} commit(s) → ${res.events} event(s) from git`)
+        : c.dim(res.toCommit && !res.fromCommit
+            ? "Baseline set at HEAD — future commits will be captured automatically."
+            : "Already up to date with git."));
     } finally { store.close(); }
   },
 

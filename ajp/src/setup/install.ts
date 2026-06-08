@@ -1,8 +1,44 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { isInitialized, findRoot } from "../core/paths.js";
+import { isInitialized, findRoot, agentPaths } from "../core/paths.js";
 import { init } from "../core/manifest.js";
+import { EventStore } from "../core/store.js";
+import { detectGit } from "../engines/git.js";
+import { syncGit } from "../engines/gitsync.js";
 import { BEGIN_MARKER, END_MARKER, rulesBlock, upsertBetween } from "./rules.js";
+
+const HOOK_BEGIN = "# AJP:BEGIN auto-capture";
+const HOOK_END = "# AJP:END";
+const HOOK_BODY = `${HOOK_BEGIN}\ncommand -v ajp >/dev/null 2>&1 && ajp sync >/dev/null 2>&1 || true\n${HOOK_END}`;
+
+/**
+ * Install a git `post-commit` hook that runs `ajp sync`, so every commit is
+ * auto-captured into the journal with zero agent effort. Idempotent; preserves
+ * any existing hook content. Returns true if a repo hook was written.
+ */
+export function installGitHook(root: string): boolean {
+  const info = detectGit(root);
+  if (!info.isRepo || !info.gitDir) return false;
+  const hooksDir = join(info.gitDir, "hooks");
+  mkdirSync(hooksDir, { recursive: true });
+  const hookPath = join(hooksDir, "post-commit");
+
+  let existing = existsSync(hookPath) ? readFileSync(hookPath, "utf8") : "";
+  if (!existing.trim()) existing = "#!/bin/sh\n";
+  if (existing.includes(HOOK_BEGIN)) {
+    const re = new RegExp(`${HOOK_BEGIN}[\\s\\S]*?${HOOK_END}`);
+    existing = existing.replace(re, HOOK_BODY);
+  } else {
+    existing = existing.trimEnd() + "\n\n" + HOOK_BODY + "\n";
+  }
+  writeFileSync(hookPath, existing);
+  try {
+    chmodSync(hookPath, 0o755);
+  } catch {
+    // chmod may fail on some filesystems; the hook still works if executable.
+  }
+  return true;
+}
 
 /**
  * Project setup — the one-shot that makes AJP "just work" for every coding agent
@@ -35,6 +71,8 @@ export interface SetupResult {
   initializedJournal: boolean;
   filesCreated: string[];
   filesUpdated: string[];
+  /** Whether a git post-commit auto-capture hook was installed. */
+  gitHook: boolean;
 }
 
 /**
@@ -50,10 +88,11 @@ export function upsertBlock(existing: string): { content: string; updated: boole
  *
  * @param root  Project root.
  * @param opts.all  Create every known agent file, not just the primary ones.
+ * @param opts.gitHook  Set false to skip installing the git auto-capture hook.
  */
 export function setupProject(
   root: string,
-  opts: { all?: boolean } = {},
+  opts: { all?: boolean; gitHook?: boolean } = {},
 ): SetupResult {
   const filesCreated: string[] = [];
   const filesUpdated: string[] = [];
@@ -83,10 +122,26 @@ export function setupProject(
     else filesCreated.push(path);
   }
 
+  // 3. Wire git auto-capture: install the post-commit hook + set the sync
+  //    baseline so future commits flow into the journal with no agent effort.
+  let gitHook = false;
+  if (opts.gitHook !== false) {
+    gitHook = installGitHook(root);
+    if (gitHook) {
+      const store = new EventStore(agentPaths(root).db);
+      try {
+        syncGit(store, root); // baseline (or capture, if a baseline already existed)
+      } finally {
+        store.close();
+      }
+    }
+  }
+
   return {
     root: findRoot(root) ?? root,
     initializedJournal,
     filesCreated,
     filesUpdated,
+    gitHook,
   };
 }
