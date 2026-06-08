@@ -1,12 +1,12 @@
 <!-- CAIRN:BEGIN (managed by cairn — do not edit between markers) -->
-## Cairn (Cairn) — shared project memory
+## Cairn — shared project memory
 
 This project has a shared, append-only memory journal in `.agent/`. It is the
 source of truth for goals, tasks, decisions and what every agent has done. Use the
 `cairn` command-line tool to read and write it. **Always keep it up to date** so work
 survives across sessions and so other agents never duplicate or undo your work.
 
-> NOTE: if `cairn: command not found`, run it as `node /Users/abhishek/Desktop/AgentMem/bin/cairn.js` instead
+> NOTE: if `cairn: command not found`, run it as `node /Users/abhishek/Desktop/Cairn/bin/cairn.js` instead
 > (substitute that for `cairn` in every command below).
 
 ### At the start of every session — instant recall
@@ -59,5 +59,5 @@ It fuses git history (files that change together) with a static code graph
 The `.agent/` journal is committed with the repo (its derived caches are
 git-ignored automatically). Treat it like shared team memory.
 
-(Reminder: if `cairn` isn't found, run it as `node /Users/abhishek/Desktop/AgentMem/bin/cairn.js`.)
+(Reminder: if `cairn` isn't found, run it as `node /Users/abhishek/Desktop/Cairn/bin/cairn.js`.)
 <!-- CAIRN:END -->

@@ -22,7 +22,7 @@ export function rulesBody(cairnBin = "cairn"): string {
     ? ""
     : `\n\n(Reminder: if \`cairn\` isn't found, run it as \`${cairnBin}\`.)`;
 
-  return `## Cairn (Cairn) — shared project memory
+  return `## Cairn — shared project memory
 
 This project has a shared, append-only memory journal in \`.agent/\`. It is the
 source of truth for goals, tasks, decisions and what every agent has done. Use the
@@ -100,7 +100,7 @@ export const GLOBAL_END_MARKER = "<!-- CAIRN-GLOBAL:END -->";
  * that doesn't have it yet — so the human installs once, globally, and never
  * runs per-project setup again.
  */
-export const GLOBAL_RULES_BODY = `## Cairn (Cairn) — global bootstrap
+export const GLOBAL_RULES_BODY = `## Cairn — global bootstrap
 
 This machine has the \`cairn\` tool installed globally. Cairn is a shared, append-only
 memory journal for AI agents, stored in a project's \`.agent/\` directory.
