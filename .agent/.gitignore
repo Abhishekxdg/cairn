@@ -1,4 +1,7 @@
-# Derived/optimization data — rebuildable from the journal, not committed.
+# The SQLite db is a fast, rebuildable CACHE — the committed source of truth is
+# events.jsonl (append-only, merge-friendly). Do not commit the binary db; it
+# would conflict across branches and is regenerated from events.jsonl on open.
+journal.db
 journal.db-wal
 journal.db-shm
 state/
