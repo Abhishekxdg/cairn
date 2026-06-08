@@ -19,8 +19,19 @@ import { writeContextFile, renderRecall } from "../engines/recall.js";
 import { setupProject } from "../setup/install.js";
 import { installGlobal, uninstallGlobal } from "../setup/global.js";
 import { renderProjectSetup, renderGlobalSetup } from "./screens.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
-const VERSION = "0.1.2";
+// Read version from package.json so it never drifts from the published version.
+const VERSION = (() => {
+  try {
+    const pkgPath = join(dirname(fileURLToPath(import.meta.url)), "../../package.json");
+    return JSON.parse(readFileSync(pkgPath, "utf8")).version as string;
+  } catch {
+    return "0.0.0";
+  }
+})();
 
 // --- styling -----------------------------------------------------------------
 const useColor = process.stdout.isTTY && process.env["NO_COLOR"] === undefined;
