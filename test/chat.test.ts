@@ -1,6 +1,7 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { memStore, cleanupAll } from "./helpers.js";
 import { sendMessage, inbox } from "../src/engines/chat.js";
+import { history, listTeams } from "../src/engines/chat.js";
 
 afterAll(cleanupAll);
 
@@ -23,6 +24,44 @@ describe("chat engine — send + inbox", () => {
     const s = memStore("proj1");
     sendMessage(s.db, { room: "proj1", sender: "Claude", to: "Codex", body: "hi" });
     expect(inbox(s.db, { room: "proj1", actor: "Claude" })).toEqual([]);
+    s.close();
+  });
+});
+
+describe("chat engine — broadcast, teams, history", () => {
+  it("delivers a broadcast (no recipient) to everyone but the sender", () => {
+    const s = memStore("p");
+    sendMessage(s.db, { room: "p", sender: "Claude", body: "standup in 5" });
+    expect(inbox(s.db, { room: "p", actor: "Codex" }).map((m) => m.body)).toEqual(["standup in 5"]);
+    expect(inbox(s.db, { room: "p", actor: "Gemini" }).map((m) => m.body)).toEqual(["standup in 5"]);
+    expect(inbox(s.db, { room: "p", actor: "Claude" })).toEqual([]);
+    s.close();
+  });
+
+  it("routes a team-addressed message to members acting as that team", () => {
+    const s = memStore("p");
+    sendMessage(s.db, { room: "p", sender: "Claude", to: "frontend", body: "ship the navbar" });
+    expect(inbox(s.db, { room: "p", actor: "Codex", team: "frontend" }).map((m) => m.body))
+      .toEqual(["ship the navbar"]);
+    expect(inbox(s.db, { room: "p", actor: "Gemini", team: "backend" })).toEqual([]);
+    s.close();
+  });
+
+  it("history returns recent messages newest-last, optionally per team", () => {
+    const s = memStore("p");
+    sendMessage(s.db, { room: "p", sender: "Claude", body: "a" });
+    sendMessage(s.db, { room: "p", sender: "Claude", to: "frontend", team: "frontend", body: "b" });
+    expect(history(s.db, { room: "p" }).map((m) => m.body)).toEqual(["a", "b"]);
+    expect(history(s.db, { room: "p", team: "frontend" }).map((m) => m.body)).toEqual(["b"]);
+    s.close();
+  });
+
+  it("listTeams returns distinct non-null team tags seen in the room", () => {
+    const s = memStore("p");
+    sendMessage(s.db, { room: "p", sender: "Claude", team: "frontend", body: "x" });
+    sendMessage(s.db, { room: "p", sender: "Claude", team: "backend", body: "y" });
+    sendMessage(s.db, { room: "p", sender: "Claude", body: "z" });
+    expect(listTeams(s.db, "p").sort()).toEqual(["backend", "frontend"]);
     s.close();
   });
 });

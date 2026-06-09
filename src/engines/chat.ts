@@ -105,3 +105,32 @@ export function inbox(db: Database, input: InboxInput): ChatMessage[] {
   tx(rows);
   return fresh;
 }
+
+export interface HistoryInput {
+  room: string;
+  team?: string;
+  limit?: number;
+}
+
+/** Recent messages in the room (oldest→newest within the returned window). */
+export function history(db: Database, input: HistoryInput): ChatMessage[] {
+  const limit = input.limit ?? 50;
+  const rows = (
+    input.team
+      ? db
+          .prepare("SELECT * FROM chat WHERE room = ? AND team = ? ORDER BY ts DESC LIMIT ?")
+          .all(input.room, input.team, limit)
+      : db
+          .prepare("SELECT * FROM chat WHERE room = ? ORDER BY ts DESC LIMIT ?")
+          .all(input.room, limit)
+  ) as Row[];
+  return rows.reverse().map(decode);
+}
+
+/** Distinct team tags that have appeared in the room. */
+export function listTeams(db: Database, room: string): string[] {
+  const rows = db
+    .prepare("SELECT DISTINCT team FROM chat WHERE room = ? AND team IS NOT NULL")
+    .all(room) as Array<{ team: string }>;
+  return rows.map((r) => r.team);
+}
