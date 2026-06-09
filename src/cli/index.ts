@@ -126,7 +126,7 @@ const commands: Record<string, Handler> = {
     });
     // Teach the coding agents (unless --no-agents), then show the nice screen.
     const s = flags["no-agents"]
-      ? { root: res.root, initializedJournal: true, filesCreated: [], filesUpdated: [], gitHook: false, sessionHook: false }
+      ? { root: res.root, initializedJournal: true, filesCreated: [], filesUpdated: [], gitHook: false, sessionHook: false, filesIndexed: 0 }
       : setupProject(cwd, { all: Boolean(flags["all"]) });
     // Build the static code index now, so cold-start "task → files" works on the
     // very first message — before any commit history exists. Best-effort.
@@ -158,7 +158,10 @@ const commands: Record<string, Handler> = {
 
   setup(_rest, flags) {
     const cwd = process.cwd();
-    const r = setupProject(cwd, { all: Boolean(flags["all"]) });
+    // Running `cairn setup` IS consent, so build the code graph by default
+    // (`--no-index` to skip). This is the fallback path postinstall points at
+    // when it couldn't prompt (no TTY).
+    const r = setupProject(cwd, { all: Boolean(flags["all"]), buildIndex: !flags["no-index"] });
     if (flags["json"]) return out(JSON.stringify(r, null, 2));
     out(renderProjectSetup(r));
   },
@@ -289,10 +292,17 @@ const commands: Record<string, Handler> = {
     const store = openStore();
     try {
       const k = fstr(flags, "k") ? Number(fstr(flags, "k")) : 10;
-      const files = rankFiles(store, query, { k });
+      const diag = { corpusSize: 0, graphNodes: 0 };
+      const files = rankFiles(store, query, { k, diag });
       if (flags["json"]) return out(JSON.stringify(files, null, 2));
       if (!files.length) {
-        out(c.dim("No relevant files — empty corpus? Run `cairn sync --full` to backfill git history."));
+        if (diag.corpusSize === 0 && diag.graphNodes === 0) {
+          out(c.dim("No relevant files — empty corpus and no code index. Run `cairn sync --full` to backfill git history, or `cairn index` to build the code graph."));
+        } else if (diag.corpusSize === 0) {
+          out(c.dim("No relevant files — code indexed but git history is empty. Run `cairn sync --full` to backfill history."));
+        } else {
+          out(c.dim("No matches for that query."));
+        }
         return;
       }
       out(c.bold(`\n  Relevant files for ${c.cyan(`"${query}"`)}`));

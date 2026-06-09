@@ -197,6 +197,8 @@ export interface RankOptions {
   corpus?: CorpusDoc[];
   /** Pre-built code graph (for backtests / cold-start with no history). */
   graph?: CodeGraph;
+  /** Out-param: rankFiles fills this with corpus/graph sizes for diagnostics. */
+  diag?: { corpusSize: number; graphNodes: number };
 }
 
 const DAY_MS = 86_400_000;
@@ -227,6 +229,7 @@ export function rankFiles(store: EventStore, query: string, opts: RankOptions = 
   // `store` may be null in backtests that supply corpus/graph directly.
   const corpus = opts.corpus ?? (store ? buildCorpus(store) : []);
   const graph = opts.graph ?? (store ? deriveCodeGraph(store) : ({ nodes: new Map(), importedBy: new Map() } as CodeGraph));
+  if (opts.diag) { opts.diag.corpusSize = corpus.length; opts.diag.graphNodes = graph.nodes.size; }
   const qTokens = tokenize(query);
   if (!qTokens.length) return [];
   if (!corpus.length && graph.nodes.size === 0) return [];

@@ -47,6 +47,9 @@ export function renderProjectSetup(r: SetupResult): string {
   if (r.gitHook) {
     lines.push("  ✓ git auto-capture        post-commit hook");
   }
+  if (r.filesIndexed > 0) {
+    lines.push(`  ✓ indexed code graph      ${r.filesIndexed} files`);
+  }
   lines.push("");
   lines.push("Next: cairn status · cairn timeline · cairn context");
   return lines.join("\n");

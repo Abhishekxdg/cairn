@@ -8,7 +8,29 @@ import { EventStore } from "../core/store.js";
 import { detectGit } from "../engines/git.js";
 import { syncGit } from "../engines/gitsync.js";
 import { writeContextFile } from "../engines/recall.js";
+import { indexRepo } from "../engines/codegraph.js";
 import { BEGIN_MARKER, END_MARKER, rulesBlock, upsertBetween } from "./rules.js";
+
+/**
+ * Classify a project for setup, so postinstall can decide whether to wire Cairn
+ * silently or ask first:
+ *   - "initialized": already has an `.agent/` journal — consent is implied; a
+ *     re-install just refreshes idempotently, never re-prompts.
+ *   - "existing": a git repo that already has commits (real prior history). Auto-
+ *     wiring this is surprising, so postinstall asks before touching it.
+ *   - "new": a fresh/empty dir or a commit-less repo — nothing to disturb, wire
+ *     silently.
+ * Reads `.git` directly (no `git` binary), so it works in any environment.
+ */
+export type RepoKind = "initialized" | "existing" | "new";
+
+export function classifyRepo(root: string): RepoKind {
+  if (isInitialized(root)) return "initialized";
+  const info = detectGit(root);
+  // A repo with at least one commit = existing history worth asking about.
+  if (info.isRepo && info.commit) return "existing";
+  return "new";
+}
 
 /** Absolute path to this package's `cairn` CLI entry (dist/setup → ../../bin). */
 const CAIRN_BIN = resolve(dirname(fileURLToPath(import.meta.url)), "../../bin/cairn.js");
@@ -181,6 +203,8 @@ export interface SetupResult {
   gitHook: boolean;
   /** Whether a Claude Code SessionStart auto-recall hook was installed. */
   sessionHook: boolean;
+  /** Number of source files indexed into the static code graph (0 if skipped). */
+  filesIndexed: number;
 }
 
 /**
@@ -200,10 +224,13 @@ export function upsertBlock(
  * @param root  Project root.
  * @param opts.all  Create every known agent file, not just the primary ones.
  * @param opts.gitHook  Set false to skip installing the git auto-capture hook.
+ * @param opts.buildIndex  Build the static code graph now (so `cairn relevant`
+ *   works on the existing codebase immediately). Off by default — callers that
+ *   want it on an existing repo (consented postinstall, `cairn setup`) opt in.
  */
 export function setupProject(
   root: string,
-  opts: { all?: boolean; gitHook?: boolean; sessionHook?: boolean } = {},
+  opts: { all?: boolean; gitHook?: boolean; sessionHook?: boolean; buildIndex?: boolean } = {},
 ): SetupResult {
   const filesCreated: string[] = [];
   const filesUpdated: string[] = [];
@@ -238,12 +265,26 @@ export function setupProject(
   // 3. Wire git auto-capture: install the post-commit hook + set the sync
   //    baseline so future commits flow into the journal with no agent effort.
   let gitHook = false;
+  let filesIndexed = 0;
   {
     const store = new EventStore(agentPaths(root).db);
     try {
       if (opts.gitHook !== false) {
         gitHook = installGitHook(root);
         if (gitHook) syncGit(store, root); // baseline or capture
+      }
+      // 3b. Build the static code graph now if asked, so "task → files"
+      //     (`cairn relevant`) works on an existing codebase from the first
+      //     query, before any post-install commit history exists. Best-effort:
+      //     a graph failure must never break setup.
+      if (opts.buildIndex) {
+        try {
+          const idx = indexRepo(root, { actor: "cairn" });
+          if (idx.events.length) store.batchAppend(idx.events);
+          filesIndexed = idx.files;
+        } catch {
+          /* indexing is best-effort; never block setup */
+        }
       }
       // 4. Render the instant-recall file so a new agent is oriented by one read.
       writeContextFile(store, root);
@@ -266,5 +307,6 @@ export function setupProject(
     filesUpdated,
     gitHook,
     sessionHook,
+    filesIndexed,
   };
 }

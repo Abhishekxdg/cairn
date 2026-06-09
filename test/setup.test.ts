@@ -2,8 +2,20 @@ import { describe, it, expect, afterAll } from "vitest";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tempDir, cleanupAll } from "./helpers.js";
-import { setupProject, upsertBlock, AGENT_FILES, installSessionHook } from "../src/setup/install.js";
+import { execFileSync } from "node:child_process";
+import { setupProject, upsertBlock, AGENT_FILES, installSessionHook, classifyRepo } from "../src/setup/install.js";
 import { BEGIN_MARKER, END_MARKER } from "../src/setup/rules.js";
+
+/** Make `dir` a git repo with one commit, so it classifies as "existing". */
+function gitRepoWithCommit(dir: string): void {
+  const run = (args: string[]) => execFileSync("git", ["-C", dir, ...args], { stdio: "ignore" });
+  run(["init"]);
+  run(["config", "user.email", "t@t.dev"]);
+  run(["config", "user.name", "t"]);
+  writeFileSync(join(dir, "a.js"), "export const x = 1;\n");
+  run(["add", "-A"]);
+  run(["commit", "-m", "init", "--no-verify"]);
+}
 
 afterAll(cleanupAll);
 
@@ -105,5 +117,44 @@ describe("project setup (auto-install for agents)", () => {
         ".github/copilot-instructions.md",
       ]),
     );
+  });
+});
+
+describe("repo classification + code-graph build", () => {
+  it("classifies a fresh dir as new", () => {
+    expect(classifyRepo(tempDir())).toBe("new");
+  });
+
+  it("classifies a commit-less git repo as new", () => {
+    const dir = tempDir();
+    execFileSync("git", ["-C", dir, "init"], { stdio: "ignore" });
+    expect(classifyRepo(dir)).toBe("new");
+  });
+
+  it("classifies a git repo WITH commits as existing", () => {
+    const dir = tempDir();
+    gitRepoWithCommit(dir);
+    expect(classifyRepo(dir)).toBe("existing");
+  });
+
+  it("classifies an already-initialized repo as initialized (consent implied)", () => {
+    const dir = tempDir();
+    gitRepoWithCommit(dir);
+    setupProject(dir); // creates .agent/
+    expect(classifyRepo(dir)).toBe("initialized");
+  });
+
+  it("does not build the code graph by default", () => {
+    const dir = tempDir();
+    gitRepoWithCommit(dir);
+    const r = setupProject(dir);
+    expect(r.filesIndexed).toBe(0);
+  });
+
+  it("builds the code graph when buildIndex is set", () => {
+    const dir = tempDir();
+    gitRepoWithCommit(dir);
+    const r = setupProject(dir, { buildIndex: true });
+    expect(r.filesIndexed).toBeGreaterThan(0);
   });
 });
