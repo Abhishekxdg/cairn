@@ -14,33 +14,66 @@
 //   - Honors CAIRN_NO_POSTINSTALL=1 to opt out.
 
 import { fileURLToPath } from "node:url";
-import { dirname, resolve, delimiter } from "node:path";
+import { dirname, resolve, delimiter, join } from "node:path";
+import { homedir } from "node:os";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+
+const PATH_BEGIN = "# >>> cairn PATH >>>";
+const PATH_END = "# <<< cairn PATH <<<";
 
 /**
  * When a global install lands the `cairn` bin in a directory that is NOT on the
- * user's PATH, typing `cairn` fails with a cryptic "command not found". We can't
- * (and shouldn't) edit the user's shell rc from a postinstall — that's exactly
- * the kind of silent home mutation supply-chain tooling flags. So instead we
- * detect it and print the one line they need to add. Returns the hint or "".
+ * user's PATH, typing `cairn` fails with a cryptic "command not found". Fix it
+ * automatically: append a small, clearly-marked block to the user's shell rc so
+ * `cairn` is on PATH in every new shell. Idempotent (re-runs don't duplicate)
+ * and opt-out via CAIRN_NO_PATH=1. Returns a status string to print, or "".
  */
-function pathHint() {
+function ensurePath() {
+  if (process.env.CAIRN_NO_PATH === "1") return "";
   // The global bin dir is where node itself lives (…/<prefix>/bin/node).
   const binDir = dirname(process.execPath);
   const onPath = (process.env.PATH || "")
     .split(delimiter)
     .some((p) => p && resolve(p) === resolve(binDir));
   if (onPath) return "";
-  const shellRc = (process.env.SHELL || "").includes("zsh")
-    ? "~/.zshrc"
-    : (process.env.SHELL || "").includes("bash")
-      ? "~/.bashrc"
-      : "your shell profile";
-  return (
-    `\n[cairn] NOTE: ${binDir} is not on your PATH, so the \`cairn\` command\n` +
-    `  won't be found yet. Add it (one time):\n` +
-    `    echo 'export PATH="${binDir}:$PATH"' >> ${shellRc}\n` +
-    `    source ${shellRc}\n`
-  );
+
+  // Pick the rc file for the user's shell.
+  const shell = process.env.SHELL || "";
+  const rcName = shell.includes("zsh")
+    ? ".zshrc"
+    : shell.includes("bash")
+      ? ".bashrc"
+      : ".profile";
+  const home = homedir();
+  if (!home) return "";
+  const rc = join(home, rcName);
+
+  try {
+    const existing = existsSync(rc) ? readFileSync(rc, "utf8") : "";
+    // Already wired by us (or the dir is already exported)? Don't touch it.
+    if (existing.includes(PATH_BEGIN) || existing.includes(`"${binDir}:$PATH"`)) {
+      return "";
+    }
+    const block =
+      `${PATH_BEGIN}\n` +
+      `export PATH="${binDir}:$PATH"\n` +
+      `${PATH_END}\n`;
+    const next = existing.trimEnd();
+    writeFileSync(rc, (next ? next + "\n\n" : "") + block);
+    return (
+      `\n[cairn] Added ${binDir} to your PATH in ${rc.replace(home, "~")}.\n` +
+      `  Open a new terminal, or run:  source ${rc.replace(home, "~")}\n` +
+      `  (opt out next time with CAIRN_NO_PATH=1; remove the marked block to undo.)\n`
+    );
+  } catch (err) {
+    // Never break the install — fall back to telling the user how.
+    return (
+      `\n[cairn] NOTE: ${binDir} is not on your PATH. Add it:\n` +
+      `    echo 'export PATH="${binDir}:$PATH"' >> ~/${rcName}\n` +
+      `    source ~/${rcName}\n` +
+      `  (${err && err.message ? err.message : err})\n`
+    );
+  }
 }
 
 async function main() {
@@ -74,8 +107,8 @@ async function main() {
           "  `cairn uninstall-global`).\n",
       );
     }
-    const hint = pathHint();
-    if (hint) process.stdout.write(hint);
+    const pathStatus = ensurePath();
+    if (pathStatus) process.stdout.write(pathStatus);
     process.stdout.write("\n");
     return;
   }
