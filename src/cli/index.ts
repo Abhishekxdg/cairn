@@ -14,7 +14,7 @@ import { renderTimeline } from "../engines/timeline.js";
 import { detectGit } from "../engines/git.js";
 import { pruneAgents } from "../engines/agents.js";
 import { compactJournal } from "../engines/compaction.js";
-import { syncGit, gitDrift } from "../engines/gitsync.js";
+import { syncGit, syncWorking, gitDrift } from "../engines/gitsync.js";
 import { writeContextFile, renderRecall } from "../engines/recall.js";
 import { sendMessage, inbox, history, listTeams } from "../engines/chat.js";
 import { setActiveTeam, getActiveTeam, clearActiveTeam, listMembershipTeams, inboxCooldownOk } from "../engines/chat-membership.js";
@@ -96,6 +96,7 @@ ${c.bold("COMMANDS")}
   index                      Build the static code graph (imports + exports) for cold-start
   watch                      Live-reindex the code graph on every save (--debounce ms)
   sync                       Capture commits as events + extract decisions (--full, --no-extract)
+                             --working captures UNCOMMITTED edits as provisional file events
   snapshot                   Force a state snapshot
   compact                    Cold-archive old events + reclaim space (--keep-recent N)
   prune                      Disconnect stale agents (--idle-ms N)
@@ -445,6 +446,20 @@ const commands: Record<string, Handler> = {
     const r = requireRoot();
     const store = openStore();
     try {
+      // --working: capture UNCOMMITTED edits as provisional file events, so work
+      // survives a session even when nothing is committed. Superseded by the real
+      // commit later. Runs instead of the commit-history sync.
+      if (flags["working"]) {
+        const w = syncWorking(store, r);
+        writeContextFile(store, r);
+        if (flags["json"]) return out(JSON.stringify(w, null, 2));
+        if (!w.synced) return out(c.yellow("⚠ Not a git repo — nothing to sync."));
+        return out(w.events
+          ? c.green(`✔ Captured ${w.changed} uncommitted change(s) → ${w.events} provisional event(s)`)
+          : c.dim(w.changed
+            ? "Uncommitted changes already captured — nothing new."
+            : "Working tree clean — nothing uncommitted to capture."));
+      }
       const res = syncGit(store, r, {
         full: Boolean(flags["full"]),
         extractIntent: !flags["no-extract"],

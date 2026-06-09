@@ -4,7 +4,7 @@ import { writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDir, cleanupAll } from "./helpers.js";
 import { EventStore } from "../src/core/store.js";
-import { syncGit, gitDrift } from "../src/engines/gitsync.js";
+import { syncGit, syncWorking, gitDrift } from "../src/engines/gitsync.js";
 import { deriveState } from "../src/engines/state.js";
 import { setupProject, installGitHook } from "../src/setup/install.js";
 
@@ -146,6 +146,54 @@ describe("git auto-capture", () => {
     const dir = tempDir();
     const s = store(dir);
     const r = syncGit(s, dir);
+    expect(r.synced).toBe(false);
+    s.close();
+  });
+});
+
+describe("working-tree capture (uncommitted memory)", () => {
+  it("captures uncommitted edits as provisional file events, no commit needed", () => {
+    const dir = repo();
+    commit(dir, "seed.ts", "x", "init");
+    const s = store(dir);
+    // Edit without committing.
+    writeFileSync(join(dir, "draft.ts"), "work in progress");
+    const r = syncWorking(s, dir);
+    expect(r.synced).toBe(true);
+    expect(r.changed).toBe(1);
+    expect(r.events).toBe(1);
+    const created = s.queryEvents({ types: ["file.created"] });
+    const e = created.find((x) => x.payload["path"] === "draft.ts");
+    expect(e?.payload["source"]).toBe("working");
+    s.close();
+  });
+
+  it("is idempotent per path — re-running the same dirty set adds nothing", () => {
+    const dir = repo();
+    commit(dir, "seed.ts", "x", "init");
+    const s = store(dir);
+    writeFileSync(join(dir, "draft.ts"), "wip");
+    syncWorking(s, dir);
+    const n = s.count();
+    syncWorking(s, dir);
+    expect(s.count()).toBe(n);
+    s.close();
+  });
+
+  it("ignores the journal itself and no-ops on a clean tree", () => {
+    const dir = repo();
+    commit(dir, "seed.ts", "x", "init");
+    const s = store(dir);
+    const r = syncWorking(s, dir); // nothing uncommitted
+    expect(r.changed).toBe(0);
+    expect(r.events).toBe(0);
+    s.close();
+  });
+
+  it("no-ops cleanly outside a git repo", () => {
+    const dir = tempDir();
+    const s = store(dir);
+    const r = syncWorking(s, dir);
     expect(r.synced).toBe(false);
     s.close();
   });

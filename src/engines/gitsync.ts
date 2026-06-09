@@ -287,3 +287,77 @@ export function syncGit(
     toCommit: head,
   };
 }
+
+export interface WorkingSyncResult {
+  synced: boolean;
+  /** Number of uncommitted paths seen in the working tree. */
+  changed: number;
+  /** Number of NEW provisional events appended (idempotent per path). */
+  events: number;
+}
+
+/**
+ * Capture UNCOMMITTED work as provisional file events.
+ *
+ * {@link syncGit} only sees committed history, so an agent that edits files but
+ * never commits leaves no file-memory behind — the next session is blind to the
+ * in-flight work. This reads `git status` and emits `file.*` events tagged
+ * `source: "working"` with a path-stable id (`gitworking:<path>`), so they:
+ *   - persist to `events.jsonl` immediately (no commit required), and
+ *   - are naturally superseded once the real commit lands and `syncGit` appends
+ *     the authoritative `gitfile:<sha>:<path>` event for the same path.
+ *
+ * Idempotent: re-running on the same dirty set appends nothing new (INSERT OR
+ * IGNORE on the path-keyed id). Best-effort — a no-op outside a git repo.
+ */
+export function syncWorking(store: EventStore, root: string): WorkingSyncResult {
+  const info = detectGit(root);
+  if (!info.isRepo) return { synced: false, changed: 0, events: 0 };
+
+  let raw: string;
+  try {
+    raw = git(root, ["-c", "core.quotepath=false", "status", "--porcelain", "--untracked-files=all"]);
+  } catch {
+    return { synced: false, changed: 0, events: 0 };
+  }
+
+  const branch = info.branch;
+  const now = new Date().toISOString();
+  const events: NewEvent[] = [];
+  let changed = 0;
+
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    const xy = line.slice(0, 2);
+    let path = line.slice(3);
+    // Renames/copies render as "old -> new"; the new path is what exists now.
+    const arrow = path.indexOf(" -> ");
+    if (arrow !== -1) path = path.slice(arrow + 4);
+    // Paths with special chars are wrapped in double quotes.
+    if (path.startsWith('"') && path.endsWith('"')) path = path.slice(1, -1);
+    if (isJournalPath(path)) continue; // never journal the journal itself
+
+    // Prefer the staged (index) status char, falling back to the worktree char.
+    const status = xy === "??" ? "A" : (xy.trim().charAt(0) || "M");
+    const type =
+      status === "D" ? "file.deleted" : status === "A" ? "file.created" : "file.modified";
+    changed++;
+    events.push({
+      type,
+      id: `gitworking:${path}`,
+      actor: "working-tree",
+      timestamp: now,
+      payload: {
+        path,
+        ...(branch ? { gitBranch: branch } : {}),
+        source: "working",
+      },
+    });
+  }
+
+  // Report NEWLY-inserted events, not built ones: the path-keyed id dedupes via
+  // INSERT OR IGNORE, so a re-run on the same dirty set inserts nothing.
+  const before = store.count();
+  if (events.length) store.batchAppend(events);
+  return { synced: true, changed, events: store.count() - before };
+}

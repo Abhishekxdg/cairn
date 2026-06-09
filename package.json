@@ -1,6 +1,6 @@
 {
   "name": "@memxai/cairn",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Cairn — an append-only journal for AI agents. Git-like memory, without the complexity.",
   "publishConfig": {
     "access": "public"
@@ -8,6 +8,14 @@
   "type": "module",
   "license": "Apache-2.0",
   "author": "memxai",
+  "homepage": "https://github.com/Abhishekxdg/cairn#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Abhishekxdg/cairn.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Abhishekxdg/cairn/issues"
+  },
   "keywords": [
     "ai",
     "agents",

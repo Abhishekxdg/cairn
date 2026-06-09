@@ -9,6 +9,20 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cairn chat inbox --actor \"Claude Code\" --cooldown 60000 # cairn-chat-hook"
+          },
+          {
+            "type": "command",
+            "command": "node /Users/abhishek/Desktop/Cairn/bin/cairn.js sync --working >/dev/null 2>&1 || true # cairn-flush"
+          }
+        ]
+      }
     ]
   }
 }

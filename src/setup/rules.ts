@@ -15,7 +15,7 @@ export const END_MARKER = "<!-- CAIRN:END -->";
  * package update propagates new rules without the user re-running setup.
  */
 export const RULES_VERSION = 2;
-export const GLOBAL_RULES_VERSION = 2;
+export const GLOBAL_RULES_VERSION = 3;
 
 const VERSION_RE = /cairn-rules-version:\s*(\d+)/;
 
@@ -119,22 +119,25 @@ export const GLOBAL_END_MARKER = "<!-- CAIRN-GLOBAL:END -->";
  */
 export const GLOBAL_RULES_BODY = `## Cairn — global bootstrap
 
-This machine has the \`cairn\` tool installed globally. Cairn is a shared, append-only
-memory journal for AI agents, stored in a project's \`.agent/\` directory.
+Cairn is a shared, append-only memory journal for AI agents, stored in a
+project's \`.agent/\` directory. It is published on npm as \`@memxai/cairn\`
+(repo: https://github.com/Abhishekxdg/cairn).
 
 **On your first action in any code repository, check whether Cairn is set up.
 Do NOT set it up silently:**
-1. If the command \`cairn\` is NOT available, skip everything below silently.
-2. If \`.agent/\` already exists at the repo root, Cairn is set up: follow that
+1. If \`.agent/\` already exists at the repo root, Cairn is set up. If the \`cairn\`
+   command is missing, install it first: \`npm i -g @memxai/cairn\`. Then follow that
    project's Cairn rules — read \`.agent/CONTEXT.md\` (or run \`cairn recall\`) for
    instant recall, and record what you do as events
    (\`cairn append --type ... --payload '{...}' --actor "<you>"\`).
-3. If \`cairn\` is available but \`.agent/\` does NOT exist, **ASK the user first**:
+2. If \`.agent/\` does NOT exist and the user asks to set up (e.g. "setup cairn"),
+   first install if \`cairn\` is missing: \`npm i -g @memxai/cairn\` (the package is
+   \`@memxai/cairn\` — never install an unscoped \`cairn\`), then \`cairn setup\` and
+   \`cairn index\`.
+3. If \`.agent/\` does NOT exist and the user has NOT asked, you MAY offer once:
    "This repo has no Cairn memory journal. Set one up so agents share memory
-   across sessions?" Only if they say yes:
-   a. Run \`cairn setup\` (creates the journal + wires the project's agent rules).
-   b. Then run \`cairn index\` to build the code graph (powers \`cairn relevant\`).
-   If the user declines, skip silently and do not ask again this session.`;
+   across sessions? (installs \`@memxai/cairn\`)". If they accept, follow step 2.
+   Otherwise skip silently and don't ask again this session.`;
 
 /** The global bootstrap block including its markers. */
 export function globalRulesBlock(): string {

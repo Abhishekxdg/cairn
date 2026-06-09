@@ -15,8 +15,11 @@ describe("global bootstrap (install once, agents self-setup projects)", () => {
     const claude = readFileSync(join(home, ".claude", "CLAUDE.md"), "utf8");
     expect(claude).toContain(GLOBAL_BEGIN_MARKER);
     expect(claude).toContain("cairn setup");
-    expect(claude).toContain("ASK the user first");
     expect(claude).toContain("cairn index");
+    // Bootstrap must give agents a real install path (scoped package), not just
+    // "skip if cairn is missing" — the old text left agents stranded.
+    expect(claude).toContain("npm i -g @memxai/cairn");
+    expect(claude).toContain("never install an unscoped");
   });
 
   it("creates a tool's file when its config dir already exists", () => {

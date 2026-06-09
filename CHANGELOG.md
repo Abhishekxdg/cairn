@@ -50,6 +50,29 @@ All notable changes to this project are documented here. The format follows
 - `Task.lastVerifiedAt` / `FileOwnership.lastVerifiedAt` are optional; legacy
   `.agent/` data falls back to `updatedAt` / `claimedAt`. No migration needed.
 
+## [0.1.12] - 2026-06-09
+
+### Fixed
+
+- **Global bootstrap now gives agents a real install path.** The bootstrap block
+  written into `~/.claude/CLAUDE.md` (and other agents' global rules) previously
+  asserted Cairn was already installed and told agents to "skip silently" if the
+  `cairn` command was missing — leaving agents on a fresh machine stranded when a
+  user asked to "setup cairn". It now states the package is `@memxai/cairn`, gives
+  the install command `npm i -g @memxai/cairn`, links the repo, and warns never to
+  install an unscoped `cairn`. `GLOBAL_RULES_VERSION` bumped to 3, so existing
+  installs self-heal on the next `cairn sync`.
+
+### Added
+
+- **`cairn sync --working`** captures *uncommitted* edits as provisional
+  `file.created`/`file.modified`/`file.deleted` events (tagged `source: "working"`,
+  id keyed by path), so in-flight work survives a session even when nothing is
+  committed. The events are idempotent per path and are naturally superseded by the
+  authoritative `gitfile:<sha>:<path>` event once the real commit lands. Closes the
+  gap where an agent that edited files but never committed left no file-memory
+  behind. Added `repository`/`homepage`/`bugs` metadata to `package.json`.
+
 ## [0.1.0] - 2026-06-08
 
 ### Added
