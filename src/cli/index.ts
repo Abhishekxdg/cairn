@@ -75,6 +75,22 @@ function openStore(): EventStore {
   return new EventStore(agentPaths(requireRoot()).db);
 }
 
+/** Shared body for `cairn upgrade` / `cairn update`. */
+function doUpgrade(_rest: string[], _flags: Parsed["flags"]): void {
+  // Update the global package, then self-heal global rules to the new version.
+  out(c.dim("Updating @memxai/cairn globally…"));
+  try {
+    execFileSync("npm", ["install", "-g", "@memxai/cairn@latest"], { stdio: "inherit" });
+  } catch {
+    err(c.red("✖ npm update failed. Run manually: npm i -g @memxai/cairn@latest"));
+    process.exitCode = 1;
+    return;
+  }
+  const g = refreshGlobalRules();
+  out(c.green("✔ Updated.") + (g.length ? c.dim(` Refreshed global rules in ${g.length} file(s).`) : ""));
+  out(c.dim("  In each repo, the next `cairn sync` (post-commit) refreshes its rules."));
+}
+
 const HELP = `${c.bold("cairn")} — Cairn · the Git of AI memory
 
 ${c.bold("USAGE")}
@@ -86,7 +102,7 @@ ${c.bold("COMMANDS")}
   setup                      Set up this repo (interactive on a TTY; --yes to skip prompts)
   install-global             Wire global agent rules so agents self-setup every repo
   uninstall-global           Remove the global bootstrap rules
-  upgrade                    Update cairn globally + refresh agent rules
+  update | upgrade           Update cairn globally + refresh agent rules
   status                     Show derived project state
   append --type T            Append an event (--payload '<json>' --actor N)
   anchor "<fact>"            Pin a durable fact into every context (--weight N to rank)
@@ -167,20 +183,9 @@ const commands: Record<string, Handler> = {
       : c.dim("No global bootstrap found."));
   },
 
-  upgrade(_rest, _flags) {
-    // Update the global package, then self-heal global rules to the new version.
-    out(c.dim("Updating @memxai/cairn globally…"));
-    try {
-      execFileSync("npm", ["install", "-g", "@memxai/cairn@latest"], { stdio: "inherit" });
-    } catch {
-      err(c.red("✖ npm update failed. Run manually: npm i -g @memxai/cairn@latest"));
-      process.exitCode = 1;
-      return;
-    }
-    const g = refreshGlobalRules();
-    out(c.green("✔ Upgraded.") + (g.length ? c.dim(` Refreshed global rules in ${g.length} file(s).`) : ""));
-    out(c.dim("  In each repo, the next `cairn sync` (post-commit) refreshes its rules."));
-  },
+  upgrade(rest, flags) { return doUpgrade(rest, flags); },
+  // `cairn update` is a natural synonym — alias it to upgrade.
+  update(rest, flags) { return doUpgrade(rest, flags); },
 
   async quickstart(_rest, _flags) {
     // The friendly front door: interactive wizard on a TTY, recommended defaults
@@ -637,7 +642,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<numbe
     await handler(positionals.slice(1), flags);
     // One-line "newer cairn available" nudge — skipped for machine-readable
     // output and the long-running MCP server; bounded by a 2s cached check.
-    if (cmd !== "mcp" && cmd !== "upgrade" && !flags["json"]) {
+    if (cmd !== "mcp" && cmd !== "upgrade" && cmd !== "update" && !flags["json"]) {
       await notifyIfUpdate(VERSION);
     }
     return typeof process.exitCode === "number" ? process.exitCode : 0;

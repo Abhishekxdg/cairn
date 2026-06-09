@@ -8,6 +8,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **`cairn update`** — alias for `cairn upgrade` (updates the global package +
+  self-heals agent rules). Both names work now.
 - **Polished quickstart UI.** The wizard now renders a boxed banner, a "Detected"
   context panel (repo/agents/claude CLI), a styled arrow menu with hint footer, a
   checkbox multiselect for the Customize path (space toggles, `a` selects all), an
