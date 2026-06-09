@@ -17,8 +17,8 @@ Next:
 Recent activity:
 - Decision: Keep npm postinstall informational by default — Distribution lifecycle scripts should not mutate home shell config or target repos unless CAIRN_SETUP=1 explicitly opts in. — Codex _(now)_
 - Learned: Known bug: post-commit sync auto-commit can delete .agent under concurrent sessions (race). Workaround CAIRN_NO_AUTOCOMMIT=1. Partial fix 5f7b328 stopped sync hook committing journal deletions. — Claude Code _(9m)_
-- Learned: Agent chatroom feature shipped: cairn chat CLI (send/inbox/tail/history/teams/join/leave), MCP tools chat_send/chat_wait/chat_teams, Claude Code SessionStart+Stop hooks, session-local active-team membership, broadcast + team routing. — Claude Code _(9m)_
-- Task started: t-distribution-fixes — Codex _(now)_
-- Task started: t-distribution-review — Codex _(7m)_
+- code.indexed — cli _(now)_
+- code.indexed — cli _(now)_
+- code.indexed — cli _(now)_
 
-_seq 2179 · ~375 tokens · regenerated automatically — do not edit_
+_seq 2272 · ~304 tokens · regenerated automatically — do not edit_
