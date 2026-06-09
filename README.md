@@ -87,18 +87,18 @@ It comes down to **orientation cost**: how many tokens an agent burns answering
 
 | Approach | What the agent reads | Tokens to orient |
 |---|---|---|
-| **Without Cairn** | git log + the 6 most-recently-changed files (what a cold agent actually does) | **~16,600** |
+| **Without Cairn** | git log + the 6 most-recently-changed source files (what a cold agent actually does) | **~15,600** |
 | **With Cairn** | one `CONTEXT.md` read (~1 KB) | **~235** |
-| **Difference** | | **~70× cheaper** |
+| **Difference** | | **~67× cheaper** |
 
 > Reproduce: `npm run wedge` (or `node scripts/wedge-eval.mjs`) on this repo. The
-> "without" figure depends on the size of the recently-changed files, so the exact
-> ratio moves with repo state — we've measured **~70× to ~150×** here. The
-> direction is the constant: a fixed ~1 KB read versus a repo scan that only grows
-> with the codebase.
+> "without" figure depends on the size of the recently-changed source files, so the
+> exact ratio moves with repo state — typically **50–100×** here. The direction is
+> the constant: a fixed ~1 KB read versus a repo scan that only grows with the
+> codebase.
 
 That's per session, per agent. Four agents opening the repo 10×/day pay the
-"without" cost **40 times a day** — roughly **660k tokens/day** on this repo —
+"without" cost **40 times a day** — roughly **620k tokens/day** on this repo —
 versus ~9k with Cairn.
 
 ### It's not just cheaper — it's correct

@@ -47,6 +47,11 @@ const changed = sh("git", ["diff", "--name-only", "HEAD~5", "HEAD"])
   .split("\n")
   .map((s) => s.trim())
   .filter(Boolean)
+  // Exclude the journal itself: a Cairn-less agent has no `.agent/`, so feeding
+  // events.jsonl back into the "without" reconstruction is circular and wildly
+  // inflates/destabilizes the number (the journal is often the largest, most
+  // recently changed file). Also skip lockfiles — no agent reads those to orient.
+  .filter((f) => !f.startsWith(".agent/") && !/(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/.test(f))
   .slice(0, 6);
 
 let fileTokens = 0;
