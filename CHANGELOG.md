@@ -8,6 +8,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Polished quickstart UI.** The wizard now renders a boxed banner, a "Detected"
+  context panel (repo/agents/claude CLI), a styled arrow menu with hint footer, a
+  checkbox multiselect for the Customize path (space toggles, `a` selects all), an
+  animated step checklist with per-step timings, and a summary card — all
+  zero-dependency ANSI, with a clean non-TTY fallback.
 - **`cairn quickstart` now wires Claude Code directly.** When the `claude` CLI is
   present it registers the Cairn MCP server (`claude mcp add -s user cairn -- cairn
   mcp`) as part of setup — no manual `/plugin` step needed. The SessionStart context
