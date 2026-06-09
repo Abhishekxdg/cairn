@@ -2,7 +2,7 @@ import { describe, it, expect, afterAll } from "vitest";
 import { memStore, cleanupAll, tempDir } from "./helpers.js";
 import { sendMessage, inbox } from "../src/engines/chat.js";
 import { history, listTeams } from "../src/engines/chat.js";
-import { setActiveTeam, getActiveTeam, clearActiveTeam, listMembershipTeams } from "../src/engines/chat-membership.js";
+import { setActiveTeam, getActiveTeam, clearActiveTeam, listMembershipTeams, inboxCooldownOk } from "../src/engines/chat-membership.js";
 
 afterAll(cleanupAll);
 
@@ -84,5 +84,12 @@ describe("chat membership (session-local active team)", () => {
     setActiveTeam(dir, "Gemini", "backend");
     setActiveTeam(dir, "Claude", "frontend"); // duplicate team, different actor
     expect(listMembershipTeams(dir).sort()).toEqual(["backend", "frontend"]);
+  });
+
+  it("inboxCooldownOk gates repeat checks within the window", () => {
+    const dir = tempDir();
+    expect(inboxCooldownOk(dir, "Claude Code", 60000)).toBe(true);  // first check allowed
+    expect(inboxCooldownOk(dir, "Claude Code", 60000)).toBe(false); // immediate repeat blocked
+    expect(inboxCooldownOk(dir, "Claude Code", 0)).toBe(true);      // ms<=0 always allows
   });
 });

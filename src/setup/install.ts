@@ -186,9 +186,12 @@ export const CHAT_HOOK_MARKER = "cairn-chat-hook";
 
 /**
  * Wire Claude Code chat delivery:
- *  - SessionStart: start a background `cairn chat tail` (monitor mode).
  *  - Stop: run `cairn chat inbox` between turns (turn mode) so messages that
- *    arrived mid-turn surface as soon as the agent finishes responding.
+ *    arrived mid-turn surface as soon as the agent finishes responding. A 60s
+ *    cooldown throttles the check, and the hook reads as the canonical
+ *    "Claude Code" actor so directed messages are delivered.
+ * True monitor mode (a `chat tail` loop) can't be wired into a synchronous
+ * SessionStart hook without hanging startup, so v1 is Stop-hook turn-mode only.
  * Idempotent via CHAT_HOOK_MARKER. Returns true if settings were written.
  */
 export function installChatHooks(root: string): boolean {
@@ -201,8 +204,7 @@ export function installChatHooks(root: string): boolean {
   }
   settings.hooks = settings.hooks ?? {};
 
-  const tailCmd = `cairn chat tail # ${CHAT_HOOK_MARKER}`;
-  const inboxCmd = `cairn chat inbox # ${CHAT_HOOK_MARKER}`;
+  const inboxCmd = `cairn chat inbox --actor "Claude Code" --cooldown 60000 # ${CHAT_HOOK_MARKER}`;
 
   const merge = (event: string, command: string) => {
     const list: any[] = Array.isArray(settings.hooks[event]) ? settings.hooks[event] : [];
@@ -216,7 +218,6 @@ export function installChatHooks(root: string): boolean {
   };
 
   merge("Stop", inboxCmd);
-  merge("SessionStart", tailCmd);
 
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
   return true;

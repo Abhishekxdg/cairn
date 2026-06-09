@@ -36,6 +36,32 @@ export function clearActiveTeam(root: string, actor: string): void {
   rmSync(file(root, actor), { force: true });
 }
 
+/** Path to the per-actor inbox-cooldown timestamp file. */
+function cooldownFile(root: string, actor: string): string {
+  const safe = actor.replace(/[^A-Za-z0-9_.-]/g, "_");
+  return join(dir(root), `cooldown-${safe}.json`);
+}
+
+/**
+ * Returns true if an inbox check is allowed now (last check older than `ms`),
+ * and if so records the new check time. Returns false to skip (within cooldown).
+ * A zero/absent `ms` always allows.
+ */
+export function inboxCooldownOk(root: string, actor: string, ms: number): boolean {
+  if (!ms || ms <= 0) return true;
+  const f = cooldownFile(root, actor);
+  const now = Date.now();
+  if (existsSync(f)) {
+    try {
+      const last = (JSON.parse(readFileSync(f, "utf8")) as { ts?: number }).ts ?? 0;
+      if (now - last < ms) return false;
+    } catch { /* corrupt file → treat as allowed */ }
+  }
+  mkdirSync(dir(root), { recursive: true });
+  writeFileSync(f, JSON.stringify({ ts: now }), "utf8");
+  return true;
+}
+
 /** Distinct teams that any actor has joined in this repo (from membership files). */
 export function listMembershipTeams(root: string): string[] {
   const d = dir(root);

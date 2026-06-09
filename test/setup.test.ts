@@ -160,7 +160,7 @@ describe("repo classification + code-graph build", () => {
 });
 
 describe("chat hooks (Claude Code)", () => {
-  it("writes Stop + SessionStart chat hooks once, idempotently", () => {
+  it("writes a single Stop-only chat inbox hook, idempotently", () => {
     const dir = tempDir();
     setupProject(dir);
     installChatHooks(dir);
@@ -172,17 +172,27 @@ describe("chat hooks (Claude Code)", () => {
     const marked = stop.flatMap((g) => g.hooks).filter((h) => h.command.includes(CHAT_HOOK_MARKER));
     expect(marked).toHaveLength(1);
     expect(marked[0]!.command).toContain("chat inbox");
+    expect(marked[0]!.command).toContain('--actor "Claude Code"');
+    expect(marked[0]!.command).toContain("--cooldown 60000");
+    // No chat hook is wired into SessionStart (true monitor mode isn't hook-safe).
+    const start = (settings.hooks.SessionStart ?? []) as Array<{ hooks: Array<{ command: string }> }>;
+    const startCmds = start.flatMap((g) => g.hooks).map((h) => h.command);
+    expect(startCmds.some((c) => c.includes(CHAT_HOOK_MARKER))).toBe(false);
   });
 
-  it("preserves the SessionStart recall hook when chat hooks are installed", () => {
+  it("preserves the SessionStart recall hook and keeps chat Stop-only", () => {
     const dir = tempDir();
     setupProject(dir); // installs the recall hook (and chat hooks)
     installChatHooks(dir); // re-run must not clobber recall
     const settings = JSON.parse(readFileSync(join(dir, ".claude", "settings.json"), "utf8"));
     const start = settings.hooks.SessionStart as Array<{ hooks: Array<{ command: string }> }>;
-    const cmds = start.flatMap((g) => g.hooks).map((h) => h.command);
-    // Both the recall hook and the chat-tail hook coexist on SessionStart.
-    expect(cmds.some((c) => c.includes(SESSION_HOOK_MARKER))).toBe(true);
-    expect(cmds.some((c) => c.includes(CHAT_HOOK_MARKER))).toBe(true);
+    const startCmds = start.flatMap((g) => g.hooks).map((h) => h.command);
+    // The recall hook survives, and no chat hook leaks onto SessionStart.
+    expect(startCmds.some((c) => c.includes(SESSION_HOOK_MARKER))).toBe(true);
+    expect(startCmds.some((c) => c.includes(CHAT_HOOK_MARKER))).toBe(false);
+    // Chat is delivered via the Stop hook only.
+    const stop = settings.hooks.Stop as Array<{ hooks: Array<{ command: string }> }>;
+    const stopCmds = stop.flatMap((g) => g.hooks).map((h) => h.command);
+    expect(stopCmds.some((c) => c.includes(CHAT_HOOK_MARKER))).toBe(true);
   });
 });

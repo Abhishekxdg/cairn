@@ -17,7 +17,7 @@ import { compactJournal } from "../engines/compaction.js";
 import { syncGit, gitDrift } from "../engines/gitsync.js";
 import { writeContextFile, renderRecall } from "../engines/recall.js";
 import { sendMessage, inbox, history, listTeams } from "../engines/chat.js";
-import { setActiveTeam, getActiveTeam, clearActiveTeam, listMembershipTeams } from "../engines/chat-membership.js";
+import { setActiveTeam, getActiveTeam, clearActiveTeam, listMembershipTeams, inboxCooldownOk } from "../engines/chat-membership.js";
 import { setupProject, refreshProjectRules } from "../setup/install.js";
 import { installGlobal, uninstallGlobal, refreshGlobalRules } from "../setup/global.js";
 import { notifyIfUpdate } from "../engines/update.js";
@@ -360,6 +360,8 @@ const commands: Record<string, Handler> = {
           return;
         }
         case "inbox": {
+          const cooldownMs = fstr(flags, "cooldown") ? Number(fstr(flags, "cooldown")) : 0;
+          if (cooldownMs > 0 && !inboxCooldownOk(root, actor, cooldownMs)) return;
           const msgs = inbox(store.db, { room, actor, ...(myTeam ? { team: myTeam } : {}) });
           if (flags["json"]) return out(JSON.stringify(msgs, null, 2));
           if (!msgs.length) return out(c.dim("No new messages."));
