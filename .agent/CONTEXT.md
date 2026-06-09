@@ -13,7 +13,7 @@ Next:
 1. Define a goal and create the first task
 
 Recent activity:
-- Decision reverted: dec_5cc55d115b — Claude Code _(now)_
+- Decision reverted: dec_b87673efe8 — Claude Code _(now)_
 - Decision: Use X — Claude Code _(now)_
 - agent.heartbeat — Claude Code _(now)_
 - Created src/a.ts — Claude Code _(now)_

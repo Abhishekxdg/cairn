@@ -9,6 +9,23 @@ export const BEGIN_MARKER =
 export const END_MARKER = "<!-- CAIRN:END -->";
 
 /**
+ * Bump these whenever the rule TEXT changes. Each managed block is stamped with
+ * its version; on the next `cairn` run in a repo (via `sync`), a block whose
+ * stamp is older than the current version is rewritten automatically — so a
+ * package update propagates new rules without the user re-running setup.
+ */
+export const RULES_VERSION = 2;
+export const GLOBAL_RULES_VERSION = 2;
+
+const VERSION_RE = /cairn-rules-version:\s*(\d+)/;
+
+/** Read the rules-version stamped in an existing managed block (0 if absent). */
+export function parseRulesVersion(content: string): number {
+  const m = content.match(VERSION_RE);
+  return m ? Number(m[1]) : 0;
+}
+
+/**
  * The rules block body. `cairnBin` is the command agents should use to run Cairn —
  * normally `cairn`, but setup passes the resolved ABSOLUTE invocation so agents
  * work even when `cairn` isn't on their PATH.
@@ -85,7 +102,7 @@ export const RULES_BODY = rulesBody();
 
 /** The full block including markers. Pass the resolved `cairnBin` from setup. */
 export function rulesBlock(cairnBin = "cairn"): string {
-  return `${BEGIN_MARKER}\n${rulesBody(cairnBin)}\n${END_MARKER}\n`;
+  return `${BEGIN_MARKER}\n<!-- cairn-rules-version: ${RULES_VERSION} -->\n${rulesBody(cairnBin)}\n${END_MARKER}\n`;
 }
 
 // --- Global bootstrap (Option A: install once, agent self-sets-up projects) --
@@ -121,7 +138,7 @@ Do NOT set it up silently:**
 
 /** The global bootstrap block including its markers. */
 export function globalRulesBlock(): string {
-  return `${GLOBAL_BEGIN_MARKER}\n${GLOBAL_RULES_BODY}\n${GLOBAL_END_MARKER}\n`;
+  return `${GLOBAL_BEGIN_MARKER}\n<!-- cairn-rules-version: ${GLOBAL_RULES_VERSION} -->\n${GLOBAL_RULES_BODY}\n${GLOBAL_END_MARKER}\n`;
 }
 
 /**

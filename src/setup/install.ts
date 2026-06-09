@@ -9,7 +9,14 @@ import { detectGit } from "../engines/git.js";
 import { syncGit } from "../engines/gitsync.js";
 import { writeContextFile } from "../engines/recall.js";
 import { indexRepo } from "../engines/codegraph.js";
-import { BEGIN_MARKER, END_MARKER, rulesBlock, upsertBetween } from "./rules.js";
+import {
+  BEGIN_MARKER,
+  END_MARKER,
+  rulesBlock,
+  upsertBetween,
+  RULES_VERSION,
+  parseRulesVersion,
+} from "./rules.js";
 
 /**
  * Classify a project for setup, so postinstall can decide whether to wire Cairn
@@ -309,4 +316,29 @@ export function setupProject(
     sessionHook,
     filesIndexed,
   };
+}
+
+/**
+ * Self-healing rules: rewrite any agent file whose managed Cairn block is older
+ * than the current `RULES_VERSION` (or unstamped). Only touches files that
+ * already have a block — never creates new files, never installs hooks. Cheap
+ * and idempotent, so it's safe to call on every `sync`. Returns the paths it
+ * refreshed.
+ */
+export function refreshProjectRules(root: string): string[] {
+  const cairnBin = cairnInvocation();
+  const refreshed: string[] = [];
+  for (const { path } of AGENT_FILES) {
+    const full = join(root, path);
+    if (!existsSync(full)) continue;
+    const existing = readFileSync(full, "utf8");
+    if (!existing.includes(BEGIN_MARKER)) continue; // not managed here
+    if (parseRulesVersion(existing) >= RULES_VERSION) continue; // already current
+    const { content } = upsertBetween(existing, BEGIN_MARKER, END_MARKER, rulesBlock(cairnBin));
+    if (content !== existing) {
+      writeFileSync(full, content);
+      refreshed.push(path);
+    }
+  }
+  return refreshed;
 }

@@ -150,6 +150,19 @@ lives in a managed block). Undo anytime with `cairn uninstall-global`.
 
 Prefer to skip the agent prompt? Set a repo up yourself: `cairn setup`.
 
+### Staying current
+
+Updates don't install themselves, but Cairn makes them painless:
+
+- **The binary** — any `cairn` command prints a one-line nudge when a newer
+  version is on npm (checked at most once a day, cached, silent if you're current
+  or offline). Update with `cairn upgrade` (or `npm i -g @memxai/cairn`). Opt out
+  with `CAIRN_NO_UPDATE_CHECK=1`.
+- **The agent rules** — self-healing. Each managed rule block is version-stamped;
+  when you update the package, the next `cairn sync` (which the post-commit hook
+  runs automatically) rewrites any out-of-date block in place. You never re-run
+  setup just to get new rules.
+
 ---
 
 ## How agents use it

@@ -6,6 +6,8 @@ import {
   GLOBAL_END_MARKER,
   globalRulesBlock,
   upsertBetween,
+  GLOBAL_RULES_VERSION,
+  parseRulesVersion,
 } from "./rules.js";
 
 /**
@@ -100,4 +102,32 @@ export function uninstallGlobal(opts: { home?: string } = {}): GlobalSetupResult
     filesUpdated.push(rel);
   }
   return { home, filesCreated: [], filesUpdated };
+}
+
+/**
+ * Self-healing global rules: rewrite any global agent file whose bootstrap block
+ * is older than `GLOBAL_RULES_VERSION` (or unstamped). Only touches files that
+ * already contain a block — never creates new ones. Returns the rels refreshed.
+ */
+export function refreshGlobalRules(opts: { home?: string } = {}): string[] {
+  const home = opts.home ?? homedir();
+  const refreshed: string[] = [];
+  for (const { rel } of GLOBAL_AGENT_FILES) {
+    const full = join(home, rel);
+    if (!existsSync(full)) continue;
+    const existing = readFileSync(full, "utf8");
+    if (!existing.includes(GLOBAL_BEGIN_MARKER)) continue;
+    if (parseRulesVersion(existing) >= GLOBAL_RULES_VERSION) continue;
+    const { content } = upsertBetween(
+      existing,
+      GLOBAL_BEGIN_MARKER,
+      GLOBAL_END_MARKER,
+      globalRulesBlock(),
+    );
+    if (content !== existing) {
+      writeFileSync(full, content);
+      refreshed.push(rel);
+    }
+  }
+  return refreshed;
 }

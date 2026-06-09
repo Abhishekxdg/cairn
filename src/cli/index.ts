@@ -16,10 +16,12 @@ import { pruneAgents } from "../engines/agents.js";
 import { compactJournal } from "../engines/compaction.js";
 import { syncGit, gitDrift } from "../engines/gitsync.js";
 import { writeContextFile, renderRecall } from "../engines/recall.js";
-import { setupProject } from "../setup/install.js";
-import { installGlobal, uninstallGlobal } from "../setup/global.js";
+import { setupProject, refreshProjectRules } from "../setup/install.js";
+import { installGlobal, uninstallGlobal, refreshGlobalRules } from "../setup/global.js";
+import { notifyIfUpdate } from "../engines/update.js";
 import { renderProjectSetup, renderGlobalSetup } from "./screens.js";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -80,6 +82,7 @@ ${c.bold("COMMANDS")}
   setup                      Re-teach coding agents (writes Cairn rules to their files)
   install-global             Wire global agent rules so agents self-setup every repo
   uninstall-global           Remove the global bootstrap rules
+  upgrade                    Update cairn globally + refresh agent rules
   status                     Show derived project state
   append --type T            Append an event (--payload '<json>' --actor N)
   state                      Print full derived state (JSON)
@@ -154,6 +157,21 @@ const commands: Record<string, Handler> = {
     out(r.filesUpdated.length
       ? c.green(`✔ Removed global bootstrap from: ${r.filesUpdated.join(", ")}`)
       : c.dim("No global bootstrap found."));
+  },
+
+  upgrade(_rest, _flags) {
+    // Update the global package, then self-heal global rules to the new version.
+    out(c.dim("Updating @memxai/cairn globally…"));
+    try {
+      execFileSync("npm", ["install", "-g", "@memxai/cairn@latest"], { stdio: "inherit" });
+    } catch {
+      err(c.red("✖ npm update failed. Run manually: npm i -g @memxai/cairn@latest"));
+      process.exitCode = 1;
+      return;
+    }
+    const g = refreshGlobalRules();
+    out(c.green("✔ Upgraded.") + (g.length ? c.dim(` Refreshed global rules in ${g.length} file(s).`) : ""));
+    out(c.dim("  In each repo, the next `cairn sync` (post-commit) refreshes its rules."));
   },
 
   setup(_rest, flags) {
@@ -340,8 +358,14 @@ const commands: Record<string, Handler> = {
         if (idx.events.length) store.batchAppend(idx.events);
       }
       writeContextFile(store, r); // keep instant-recall file current
-      if (flags["json"]) return out(JSON.stringify(res, null, 2));
+      // Self-healing rules: if the installed cairn carries newer rule text than
+      // what's stamped in this repo's agent files, rewrite them now. Runs on
+      // every commit (the post-commit hook calls sync), so a package update
+      // propagates without the user re-running setup.
+      const refreshed = [...refreshProjectRules(r), ...refreshGlobalRules()];
+      if (flags["json"]) return out(JSON.stringify({ ...res, rulesRefreshed: refreshed }, null, 2));
       if (!res.synced) return out(c.yellow("⚠ Not a git repo — nothing to sync."));
+      if (refreshed.length) out(c.dim(`  refreshed Cairn rules in ${refreshed.length} file(s)`));
       if (res.events) {
         out(c.green(`✔ Captured ${res.commits} commit(s) → ${res.events} event(s) from git`));
         if (res.decisions) out(c.dim(`  extracted ${res.decisions} decision(s) from commit messages`));
@@ -450,6 +474,11 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<numbe
   }
   try {
     await handler(positionals.slice(1), flags);
+    // One-line "newer cairn available" nudge — skipped for machine-readable
+    // output and the long-running MCP server; bounded by a 2s cached check.
+    if (cmd !== "mcp" && cmd !== "upgrade" && !flags["json"]) {
+      await notifyIfUpdate(VERSION);
+    }
     return typeof process.exitCode === "number" ? process.exitCode : 0;
   } catch (e) {
     err(c.red(`✖ ${(e as Error).message}`));
