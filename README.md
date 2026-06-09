@@ -126,29 +126,64 @@ Cairn removes.
 
 ---
 
-## Install
+## Setup guide
 
-Install once, globally. The install itself is silent — no setup runs, nothing is
-written to your repos.
+### 1. Install globally
 
 ```bash
 npm install -g @memxai/cairn
 ```
 
-Then run the global bootstrap once:
+The install is silent — it runs no setup and writes nothing to your repos. If your
+npm global bin directory isn't on your `PATH`, the installer **adds it
+automatically** (a marked block in `~/.zshrc` / `~/.bashrc`; opt out with
+`CAIRN_NO_PATH=1`).
+
+### 2. Activate `cairn` in your shell
+
+```bash
+source ~/.zshrc        # or just open a new terminal
+cairn --version
+```
+
+### 3. Turn on the agent bootstrap (once per machine)
 
 ```bash
 cairn install-global
 ```
 
 This adds one rule to your agents' existing instruction files
-(`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, etc.): *on its first action in a repo
-that has no `.agent/`, the agent **asks you** whether to set up Cairn. Only if you
-say yes does it run `cairn setup` and build the code graph (`cairn index`).* No
-silent mutation, no MCP wiring. Your own content in those files is preserved (Cairn
-lives in a managed block). Undo anytime with `cairn uninstall-global`.
+(`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`, …): *on its
+first action in a repo that has no `.agent/`, the agent **asks you** whether to set
+up Cairn. Only if you say yes does it run `cairn setup` and build the code graph
+(`cairn index`).* No silent mutation, no MCP wiring. Your own content in those files
+is preserved (Cairn lives in a managed block).
 
-Prefer to skip the agent prompt? Set a repo up yourself: `cairn setup`.
+### 4. Set up a project
+
+Let the agent prompt you on its next action — or do it yourself:
+
+```bash
+cd your-project
+cairn setup            # creates .agent/ journal + code graph + git post-commit hook
+```
+
+### 5. Day to day
+
+```bash
+cairn recall                       # "where were we" — start every session with this
+cairn status                       # goal, active tasks, decisions
+cairn relevant "fix oauth refresh" # which files a task touches (no grep)
+cairn timeline                     # what happened, by day
+```
+
+### Uninstall
+
+```bash
+cairn uninstall-global             # remove the agent rules from your dotfiles
+npm uninstall -g @memxai/cairn     # remove the package + bins
+# then delete the "# >>> cairn PATH >>>" block from ~/.zshrc
+```
 
 ### Staying current
 
@@ -226,8 +261,9 @@ Tools: `append_event`, `query_state`, `query_context`, `query_memory`,
 ## CLI
 
 ```text
-cairn recall | status | context | relevant | append | timeline
-      | sync | snapshot | compact | prune | export | doctor | mcp
+cairn recall | status | context | relevant | append | timeline | sync
+      | setup | install-global | uninstall-global | upgrade
+      | snapshot | compact | prune | export | doctor | migrate | repair | mcp
 ```
 
 ---
