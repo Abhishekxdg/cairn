@@ -175,6 +175,47 @@ export function installSessionHook(root: string): boolean {
   return true;
 }
 
+/** Marker embedded in chat hook commands so re-running setup updates in place. */
+export const CHAT_HOOK_MARKER = "cairn-chat-hook";
+
+/**
+ * Wire Claude Code chat delivery:
+ *  - SessionStart: start a background `cairn chat tail` (monitor mode).
+ *  - Stop: run `cairn chat inbox` between turns (turn mode) so messages that
+ *    arrived mid-turn surface as soon as the agent finishes responding.
+ * Idempotent via CHAT_HOOK_MARKER. Returns true if settings were written.
+ */
+export function installChatHooks(root: string): boolean {
+  const dir = join(root, ".claude");
+  const settingsPath = join(dir, "settings.json");
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  let settings: any = {};
+  if (existsSync(settingsPath)) {
+    try { settings = JSON.parse(readFileSync(settingsPath, "utf8")); } catch { settings = {}; }
+  }
+  settings.hooks = settings.hooks ?? {};
+
+  const tailCmd = `cairn chat tail # ${CHAT_HOOK_MARKER}`;
+  const inboxCmd = `cairn chat inbox # ${CHAT_HOOK_MARKER}`;
+
+  const merge = (event: string, command: string) => {
+    const list: any[] = Array.isArray(settings.hooks[event]) ? settings.hooks[event] : [];
+    const cleaned = list.filter(
+      (g: any) =>
+        !(Array.isArray(g?.hooks) &&
+          g.hooks.some((h: any) => typeof h?.command === "string" && h.command.includes(CHAT_HOOK_MARKER))),
+    );
+    cleaned.push({ hooks: [{ type: "command", command }] });
+    settings.hooks[event] = cleaned;
+  };
+
+  merge("Stop", inboxCmd);
+  merge("SessionStart", tailCmd);
+
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+  return true;
+}
+
 /**
  * Project setup — the one-shot that makes Cairn "just work" for every coding agent
  * without MCP.
@@ -305,6 +346,7 @@ export function setupProject(
   let sessionHook = false;
   if (opts.sessionHook !== false) {
     sessionHook = installSessionHook(root);
+    installChatHooks(root);
   }
 
   return {

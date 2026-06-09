@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tempDir, cleanupAll } from "./helpers.js";
 import { execFileSync } from "node:child_process";
-import { setupProject, upsertBlock, AGENT_FILES, installSessionHook, classifyRepo } from "../src/setup/install.js";
+import { setupProject, upsertBlock, AGENT_FILES, installSessionHook, installChatHooks, CHAT_HOOK_MARKER, classifyRepo } from "../src/setup/install.js";
 import { BEGIN_MARKER, END_MARKER } from "../src/setup/rules.js";
 
 /** Make `dir` a git repo with one commit, so it classifies as "existing". */
@@ -156,5 +156,21 @@ describe("repo classification + code-graph build", () => {
     gitRepoWithCommit(dir);
     const r = setupProject(dir, { buildIndex: true });
     expect(r.filesIndexed).toBeGreaterThan(0);
+  });
+});
+
+describe("chat hooks (Claude Code)", () => {
+  it("writes Stop + SessionStart chat hooks once, idempotently", () => {
+    const dir = tempDir();
+    setupProject(dir);
+    installChatHooks(dir);
+    installChatHooks(dir); // second run must not duplicate
+    const settings = JSON.parse(
+      readFileSync(join(dir, ".claude", "settings.json"), "utf8"),
+    );
+    const stop = settings.hooks.Stop as Array<{ hooks: Array<{ command: string }> }>;
+    const marked = stop.flatMap((g) => g.hooks).filter((h) => h.command.includes(CHAT_HOOK_MARKER));
+    expect(marked).toHaveLength(1);
+    expect(marked[0]!.command).toContain("chat inbox");
   });
 });
