@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tempDir, cleanupAll } from "./helpers.js";
 import { execFileSync } from "node:child_process";
-import { setupProject, upsertBlock, AGENT_FILES, installSessionHook, installChatHooks, CHAT_HOOK_MARKER, classifyRepo } from "../src/setup/install.js";
+import { setupProject, upsertBlock, AGENT_FILES, installSessionHook, installChatHooks, CHAT_HOOK_MARKER, SESSION_HOOK_MARKER, classifyRepo } from "../src/setup/install.js";
 import { BEGIN_MARKER, END_MARKER } from "../src/setup/rules.js";
 
 /** Make `dir` a git repo with one commit, so it classifies as "existing". */
@@ -172,5 +172,17 @@ describe("chat hooks (Claude Code)", () => {
     const marked = stop.flatMap((g) => g.hooks).filter((h) => h.command.includes(CHAT_HOOK_MARKER));
     expect(marked).toHaveLength(1);
     expect(marked[0]!.command).toContain("chat inbox");
+  });
+
+  it("preserves the SessionStart recall hook when chat hooks are installed", () => {
+    const dir = tempDir();
+    setupProject(dir); // installs the recall hook (and chat hooks)
+    installChatHooks(dir); // re-run must not clobber recall
+    const settings = JSON.parse(readFileSync(join(dir, ".claude", "settings.json"), "utf8"));
+    const start = settings.hooks.SessionStart as Array<{ hooks: Array<{ command: string }> }>;
+    const cmds = start.flatMap((g) => g.hooks).map((h) => h.command);
+    // Both the recall hook and the chat-tail hook coexist on SessionStart.
+    expect(cmds.some((c) => c.includes(SESSION_HOOK_MARKER))).toBe(true);
+    expect(cmds.some((c) => c.includes(CHAT_HOOK_MARKER))).toBe(true);
   });
 });

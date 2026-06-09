@@ -128,7 +128,7 @@ export function installGitHook(root: string): boolean {
  * Marker embedded in the SessionStart hook command so re-running setup updates
  * the same hook in place instead of stacking duplicates.
  */
-const SESSION_HOOK_MARKER = "CAIRN:recall-inject";
+export const SESSION_HOOK_MARKER = "CAIRN:recall-inject";
 
 /**
  * Auto-recall: install a Claude Code SessionStart hook that injects CONTEXT.md
