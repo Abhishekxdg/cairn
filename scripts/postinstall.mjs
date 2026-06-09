@@ -14,7 +14,34 @@
 //   - Honors CAIRN_NO_POSTINSTALL=1 to opt out.
 
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, delimiter } from "node:path";
+
+/**
+ * When a global install lands the `cairn` bin in a directory that is NOT on the
+ * user's PATH, typing `cairn` fails with a cryptic "command not found". We can't
+ * (and shouldn't) edit the user's shell rc from a postinstall — that's exactly
+ * the kind of silent home mutation supply-chain tooling flags. So instead we
+ * detect it and print the one line they need to add. Returns the hint or "".
+ */
+function pathHint() {
+  // The global bin dir is where node itself lives (…/<prefix>/bin/node).
+  const binDir = dirname(process.execPath);
+  const onPath = (process.env.PATH || "")
+    .split(delimiter)
+    .some((p) => p && resolve(p) === resolve(binDir));
+  if (onPath) return "";
+  const shellRc = (process.env.SHELL || "").includes("zsh")
+    ? "~/.zshrc"
+    : (process.env.SHELL || "").includes("bash")
+      ? "~/.bashrc"
+      : "your shell profile";
+  return (
+    `\n[cairn] NOTE: ${binDir} is not on your PATH, so the \`cairn\` command\n` +
+    `  won't be found yet. Add it (one time):\n` +
+    `    echo 'export PATH="${binDir}:$PATH"' >> ${shellRc}\n` +
+    `    source ${shellRc}\n`
+  );
+}
 
 async function main() {
   if (process.env.CAIRN_NO_POSTINSTALL === "1") return;
@@ -44,9 +71,12 @@ async function main() {
         "\n[cairn] Installed globally.\n" +
           "  Run `cairn install-global` to let agents auto-set-up your repos\n" +
           "  (writes a small bootstrap rule into ~/.claude/CLAUDE.md etc.; undo with\n" +
-          "  `cairn uninstall-global`).\n\n",
+          "  `cairn uninstall-global`).\n",
       );
     }
+    const hint = pathHint();
+    if (hint) process.stdout.write(hint);
+    process.stdout.write("\n");
     return;
   }
 
