@@ -9,6 +9,7 @@ import { compileContext, type ContextLevel } from "../engines/context.js";
 import { rankFiles, compileTaskContext } from "../engines/relevance.js";
 import { deriveTimeline, deriveMemory } from "../engines/memory.js";
 import { createSnapshot } from "../engines/snapshots.js";
+import { sendMessage, inbox, listTeams } from "../engines/chat.js";
 import { setupProject } from "../setup/install.js";
 
 /**
@@ -26,6 +27,9 @@ function resolveRoot(): string {
 }
 function openStore(): EventStore {
   return new EventStore(agentPaths(resolveRoot()).db);
+}
+function mcpActor(): string {
+  return process.env["CAIRN_ACTOR"] ?? "mcp";
 }
 const text = (v: string) => ({ content: [{ type: "text" as const, text: v }] });
 const json = (v: unknown) => text(JSON.stringify(v, null, 2));
@@ -229,6 +233,56 @@ export function createServer(): McpServer {
     "Return the decisions currently in force (status = active).",
     {},
     async () => withStore((s) => json(activeDecisions(deriveState(s)))),
+  );
+
+  server.tool(
+    "chat_send",
+    "Send a realtime chat message to other agents working in this repo. Omit " +
+      "`to` to broadcast to everyone. `to` may be an agent name or a team name.",
+    {
+      body: z.string().describe("Message text"),
+      to: z.string().optional().describe("Recipient agent or team; omit to broadcast"),
+      team: z.string().optional().describe("Tag the message as belonging to this team channel"),
+    },
+    async ({ body, to, team }) =>
+      withStore((s) =>
+        json(
+          sendMessage(s.db, {
+            room: s.projectId,
+            sender: mcpActor(),
+            body,
+            ...(to ? { to } : {}),
+            ...(team ? { team } : {}),
+          }),
+        ),
+      ),
+  );
+
+  server.tool(
+    "chat_wait",
+    "Block until a chat message addressed to this agent arrives (or the timeout " +
+      "elapses), then return the new messages. Use this to receive messages live " +
+      "while working. Returns an empty array on timeout.",
+    {
+      timeoutMs: z.number().int().optional().describe("Max time to wait (default 30000)"),
+    },
+    async ({ timeoutMs }) => {
+      const deadline = Date.now() + (timeoutMs ?? 30000);
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const msgs = withStore((s) => inbox(s.db, { room: s.projectId, actor: mcpActor() }));
+        if (Array.isArray(msgs) && msgs.length) return json(msgs);
+        if (Date.now() >= deadline) return json([]);
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    },
+  );
+
+  server.tool(
+    "chat_teams",
+    "List the team channels seen in this repo's chatroom.",
+    {},
+    async () => withStore((s) => json(listTeams(s.db, s.projectId))),
   );
 
   // Read-only resources.
