@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.1]
+
+### Added
+
+- **`cairn quickstart` now wires Claude Code directly.** When the `claude` CLI is
+  present it registers the Cairn MCP server (`claude mcp add -s user cairn -- cairn
+  mcp`) as part of setup — no manual `/plugin` step needed. The SessionStart context
+  hook is already installed by project setup, so a single `cairn quickstart` gives
+  you context injection + MCP tools. The Claude Code plugin remains available for
+  users who prefer the marketplace flow (`/plugin marketplace add` then
+  `/plugin install` — run as two separate commands).
+
 ## [0.3.0]
 
 ### Added

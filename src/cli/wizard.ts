@@ -8,6 +8,7 @@
  * front door, never new setup logic.
  */
 import * as readline from "node:readline";
+import { execFileSync } from "node:child_process";
 import { setupProject, classifyRepo, type RepoKind } from "../setup/install.js";
 import { installGlobal, GLOBAL_AGENT_FILES } from "../setup/global.js";
 import { existsSync, readFileSync } from "node:fs";
@@ -65,6 +66,29 @@ async function confirm(message: string, def = true): Promise<boolean> {
   return def ? i === 0 : i === 1;
 }
 
+/** Is the Claude Code CLI on PATH? */
+function hasClaude(): boolean {
+  try { execFileSync("claude", ["--version"], { stdio: "ignore" }); return true; }
+  catch { return false; }
+}
+
+/**
+ * Register the Cairn MCP server with Claude Code directly — no `/plugin` dance.
+ * User scope so it's available in every repo (it only does anything where an
+ * `.agent/` journal exists). Idempotent enough: a duplicate add just errors,
+ * which we treat as "already wired".
+ */
+function wireClaudeMcp(): "added" | "exists" | "unavailable" {
+  if (!hasClaude()) return "unavailable";
+  // Already registered? `claude mcp get` exits 0 if it exists.
+  try { execFileSync("claude", ["mcp", "get", "cairn"], { stdio: "ignore" }); return "exists"; }
+  catch { /* not present — add it */ }
+  try {
+    execFileSync("claude", ["mcp", "add", "-s", "user", "cairn", "--", "cairn", "mcp"], { stdio: "ignore" });
+    return "added";
+  } catch { return "exists"; }
+}
+
 /** Which coding agents already have a home dir under ~/ (so we wire those). */
 function detectedAgents(home: string): string[] {
   return GLOBAL_AGENT_FILES
@@ -99,12 +123,14 @@ export async function runQuickstart(cwd: string): Promise<void> {
   );
   if (mode === 2) { line(c.dim("\nCancelled. Nothing changed.")); return; }
 
-  let doGlobal = true, all = false, gitHook = true, buildIndex = true;
+  const claudePresent = hasClaude();
+  let doGlobal = true, all = false, gitHook = true, buildIndex = true, doMcp = claudePresent;
   if (mode === 1) {
     doGlobal = await confirm("Wire the global agent bootstrap (~/.claude, ~/.codex …)?", true);
     all = await confirm("Wire every supported agent file in this repo (not just the primary ones)?", false);
     gitHook = await confirm("Install the git post-commit hook (auto-captures commits)?", true);
     buildIndex = await confirm("Build the static code graph now (powers `cairn relevant`)?", true);
+    if (claudePresent) doMcp = await confirm("Register the Cairn MCP server with Claude Code (so its tools load automatically)?", true);
   }
 
   line();
@@ -116,8 +142,18 @@ export async function runQuickstart(cwd: string): Promise<void> {
   const r = setupProject(cwd, { all, gitHook, buildIndex });
   line(renderProjectSetup(r));
 
+  // Wire Claude Code's MCP directly — replaces the manual `/plugin install`.
+  if (doMcp) {
+    const m = wireClaudeMcp();
+    if (m === "added") line(c.green("  ✓ registered the Cairn MCP server with Claude Code (claude mcp)"));
+    else if (m === "exists") line(c.dim("  · Cairn MCP server already registered with Claude Code"));
+  } else if (!claudePresent) {
+    line(c.dim("  · Claude Code CLI not found — skipped MCP wiring (install it, then `claude mcp add cairn -- cairn mcp`)"));
+  }
+
   line();
-  line(c.green("  ✔ Ready.") + c.dim("  Start any session with ") + c.bold("cairn recall") + c.dim("."));
+  line(c.green("  ✔ Ready.") + c.dim("  Restart Claude Code so the MCP + context hook load."));
+  line(c.dim("  Start any session with ") + c.bold("cairn recall") + c.dim("."));
   line(c.dim("  Pin a durable fact: ") + c.bold('cairn anchor "never write to prod"'));
   line();
 }

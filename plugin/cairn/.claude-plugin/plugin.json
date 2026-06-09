@@ -1,7 +1,7 @@
 {
   "name": "cairn",
   "displayName": "Cairn",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Shared, git-like memory for AI agents. Auto-injects project context at session start, exposes the journal over MCP, and adds recall/anchor slash commands.",
   "author": { "name": "memxai" },
   "homepage": "https://github.com/memxai/cairn",

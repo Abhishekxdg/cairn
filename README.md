@@ -182,31 +182,34 @@ And it stays within budget even when you over-pin:
 Pick the path that matches how you work. Both leave you with the same `.agent/`
 journal.
 
-### Option A — Claude Code plugin (one click, recommended)
-
-In Claude Code:
-
-```text
-/plugin marketplace add memxai/cairn
-/plugin install cairn@cairn
-```
-
-That wires everything in one step: the journal over **MCP**, a **SessionStart hook**
-that auto-injects `CONTEXT.md` so every session starts oriented, and the
-`/cairn:recall`, `/cairn:anchor`, `/cairn:status`, `/cairn:setup` slash commands. No
-shell setup, no global install. (The MCP server runs via `npx`, so the `cairn`
-binary is fetched on demand.)
-
-### Option B — npm + one command
+### Option A — npm + one command (recommended)
 
 ```bash
 npm install -g @memxai/cairn
 cairn quickstart
 ```
 
-`cairn quickstart` is an interactive wizard: it wires the global agent bootstrap and
-sets up the current repo (journal + rules + git hook + code graph) — arrow keys,
-one screen, sensible defaults. Prefer no prompts? `cairn setup --yes`.
+`cairn quickstart` is an interactive wizard that does **everything**: global agent
+bootstrap, this repo (journal + rules + git hook + code graph), **and** — if the
+`claude` CLI is installed — it registers the Cairn MCP server with Claude Code for
+you (`claude mcp add`). No `/plugin` step. Restart Claude Code afterwards so the MCP
+and the SessionStart context hook load. Prefer no prompts? `cairn setup --yes`.
+
+### Option B — Claude Code plugin (marketplace)
+
+If you'd rather use the plugin system, in Claude Code run these as **two separate
+commands** (don't paste them on one line):
+
+```text
+/plugin marketplace add memxai/cairn
+```
+```text
+/plugin install cairn@cairn
+```
+
+This wires the journal over **MCP**, a **SessionStart hook** that auto-injects
+`CONTEXT.md`, and the `/cairn:recall|anchor|status|setup` slash commands. The MCP
+server runs via `npx`, so the `cairn` binary is fetched on demand.
 
 > **Even fewer steps:** `npm install -g @memxai/cairn` *auto-runs* the global
 > bootstrap, and installing Cairn inside a project auto-sets-up that repo. Opt out
