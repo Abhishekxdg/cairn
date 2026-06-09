@@ -370,7 +370,9 @@ const commands: Record<string, Handler> = {
           return;
         }
         case "tail": {
-          const intervalMs = fstr(flags, "interval") ? Number(fstr(flags, "interval")) : 2000;
+          const raw = fstr(flags, "interval");
+          const parsed = raw ? Number(raw) : 2000;
+          const intervalMs = Number.isFinite(parsed) && parsed > 0 ? parsed : 2000;
           out(c.dim(`tailing chat as ${actor}${myTeam ? ` (${myTeam})` : ""} — Ctrl-C to stop`));
           const tick = () => {
             const msgs = inbox(store.db, { room, actor, ...(myTeam ? { team: myTeam } : {}) });
@@ -378,13 +380,21 @@ const commands: Record<string, Handler> = {
           };
           return new Promise<void>((resolve) => {
             const timer = setInterval(tick, intervalMs);
-            const stop = () => { clearInterval(timer); store.close(); resolve(); };
+            const stop = () => {
+              clearInterval(timer);
+              process.removeListener("SIGINT", stop);
+              process.removeListener("SIGTERM", stop);
+              store.close();
+              resolve();
+            };
             process.on("SIGINT", stop);
             process.on("SIGTERM", stop);
           });
         }
         case "history": {
-          const limit = fstr(flags, "limit") ? Number(fstr(flags, "limit")) : 50;
+          const rawLimit = fstr(flags, "limit");
+          const parsedLimit = rawLimit ? Number(rawLimit) : 50;
+          const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 50;
           const team = fstr(flags, "team") ?? myTeam;
           const msgs = history(store.db, { room, limit, ...(team ? { team } : {}) });
           if (flags["json"]) return out(JSON.stringify(msgs, null, 2));
