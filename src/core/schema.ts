@@ -10,7 +10,7 @@ import type { Database } from "better-sqlite3";
  */
 
 /** Current schema version this binary understands. */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /** A single forward migration. */
 export interface Migration {
@@ -73,6 +73,26 @@ export const MIGRATIONS: Migration[] = [
           payload    TEXT    NOT NULL DEFAULT '{}'
         );
         CREATE INDEX IF NOT EXISTS idx_archive_type ON events_archive(type);
+      `);
+    },
+  },
+  {
+    version: 3,
+    description: "chat table for realtime agent messaging (separate from events)",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chat (
+          id        TEXT    PRIMARY KEY,
+          room      TEXT    NOT NULL,
+          team      TEXT,
+          sender    TEXT    NOT NULL,
+          recipient TEXT,
+          body      TEXT    NOT NULL,
+          ts        INTEGER NOT NULL,
+          read_by   TEXT    NOT NULL DEFAULT '[]'
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_room_ts   ON chat(room, ts);
+        CREATE INDEX IF NOT EXISTS idx_chat_room_rcpt ON chat(room, recipient, ts);
       `);
     },
   },
