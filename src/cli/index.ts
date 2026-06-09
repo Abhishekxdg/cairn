@@ -16,6 +16,8 @@ import { pruneAgents } from "../engines/agents.js";
 import { compactJournal } from "../engines/compaction.js";
 import { syncGit, gitDrift } from "../engines/gitsync.js";
 import { writeContextFile, renderRecall } from "../engines/recall.js";
+import { sendMessage, inbox, history, listTeams } from "../engines/chat.js";
+import { setActiveTeam, getActiveTeam, clearActiveTeam } from "../engines/chat-membership.js";
 import { setupProject, refreshProjectRules } from "../setup/install.js";
 import { installGlobal, uninstallGlobal, refreshGlobalRules } from "../setup/global.js";
 import { notifyIfUpdate } from "../engines/update.js";
@@ -102,6 +104,7 @@ ${c.bold("COMMANDS")}
   migrate                    Apply pending schema migrations
   repair                     Rebuild indexes + vacuum (history untouched)
   mcp                        Start the MCP server (stdio)
+  chat <verb>                Realtime agent chat (send|inbox|tail|history|teams|join|leave)
 
 ${c.bold("FLAGS")}
   --actor <name>   Attribute appended events (or CAIRN_ACTOR)
@@ -331,6 +334,87 @@ const commands: Record<string, Handler> = {
       }
       out("");
     } finally { store.close(); }
+  },
+
+  chat(rest, flags) {
+    const verb = rest[0];
+    const root = requireRoot();
+    const actor = actorOf(flags);
+    const store = openStore();
+    const room = store.projectId;
+    const myTeam = getActiveTeam(root, actor);
+    try {
+      switch (verb) {
+        case "send": {
+          const body = (fstr(flags, "body") ?? rest.slice(1).join(" ")).trim();
+          if (!body) throw new Error('chat send requires --body "<message>"');
+          const to = fstr(flags, "to");
+          const team = fstr(flags, "team") ?? myTeam;
+          const m = sendMessage(store.db, {
+            room, sender: actor, body,
+            ...(to ? { to } : {}),
+            ...(team ? { team } : {}),
+          });
+          if (flags["json"]) return out(JSON.stringify(m, null, 2));
+          out(c.dim(`→ sent ${c.cyan(m.id.slice(-6))}${to ? ` to ${to}` : " (broadcast)"}`));
+          return;
+        }
+        case "inbox": {
+          const msgs = inbox(store.db, { room, actor, ...(myTeam ? { team: myTeam } : {}) });
+          if (flags["json"]) return out(JSON.stringify(msgs, null, 2));
+          if (!msgs.length) return out(c.dim("No new messages."));
+          for (const m of msgs) {
+            const tag = m.recipient && m.recipient !== actor ? ` @${m.recipient}` : "";
+            out(`${c.cyan(m.sender)}${c.dim(tag)}: ${m.body}`);
+          }
+          return;
+        }
+        case "tail": {
+          const intervalMs = fstr(flags, "interval") ? Number(fstr(flags, "interval")) : 2000;
+          out(c.dim(`tailing chat as ${actor}${myTeam ? ` (${myTeam})` : ""} — Ctrl-C to stop`));
+          const tick = () => {
+            const msgs = inbox(store.db, { room, actor, ...(myTeam ? { team: myTeam } : {}) });
+            for (const m of msgs) out(`${c.cyan(m.sender)}: ${m.body}`);
+          };
+          return new Promise<void>((resolve) => {
+            const timer = setInterval(tick, intervalMs);
+            const stop = () => { clearInterval(timer); store.close(); resolve(); };
+            process.on("SIGINT", stop);
+            process.on("SIGTERM", stop);
+          });
+        }
+        case "history": {
+          const limit = fstr(flags, "limit") ? Number(fstr(flags, "limit")) : 50;
+          const team = fstr(flags, "team") ?? myTeam;
+          const msgs = history(store.db, { room, limit, ...(team ? { team } : {}) });
+          if (flags["json"]) return out(JSON.stringify(msgs, null, 2));
+          for (const m of msgs) out(`${c.dim(new Date(m.ts).toLocaleTimeString())} ${c.cyan(m.sender)}: ${m.body}`);
+          return;
+        }
+        case "teams": {
+          const teams = listTeams(store.db, room);
+          if (flags["json"]) return out(JSON.stringify(teams, null, 2));
+          out(teams.length ? teams.map((t) => `  ${t}`).join("\n") : c.dim("No teams yet."));
+          return;
+        }
+        case "join": {
+          const team = rest[1];
+          if (!team) throw new Error("chat join requires a team name, e.g. cairn chat join frontend");
+          setActiveTeam(root, actor, team);
+          out(c.green(`✔ ${actor} now acting as team ${c.cyan(team)}`));
+          return;
+        }
+        case "leave": {
+          clearActiveTeam(root, actor);
+          out(c.dim(`${actor} left their team`));
+          return;
+        }
+        default:
+          throw new Error("chat <verb>: send | inbox | tail | history | teams | join | leave");
+      }
+    } finally {
+      if (verb !== "tail") store.close();
+    }
   },
 
   recall(_rest, flags) {
