@@ -1,7 +1,8 @@
 import { describe, it, expect, afterAll } from "vitest";
-import { memStore, cleanupAll } from "./helpers.js";
+import { memStore, cleanupAll, tempDir } from "./helpers.js";
 import { sendMessage, inbox } from "../src/engines/chat.js";
 import { history, listTeams } from "../src/engines/chat.js";
+import { setActiveTeam, getActiveTeam, clearActiveTeam } from "../src/engines/chat-membership.js";
 
 afterAll(cleanupAll);
 
@@ -63,5 +64,16 @@ describe("chat engine — broadcast, teams, history", () => {
     sendMessage(s.db, { room: "p", sender: "Claude", body: "z" });
     expect(listTeams(s.db, "p").sort()).toEqual(["backend", "frontend"]);
     s.close();
+  });
+});
+
+describe("chat membership (session-local active team)", () => {
+  it("round-trips an actor's active team under a root dir", () => {
+    const dir = tempDir();
+    expect(getActiveTeam(dir, "Codex")).toBeUndefined();
+    setActiveTeam(dir, "Codex", "frontend");
+    expect(getActiveTeam(dir, "Codex")).toBe("frontend");
+    clearActiveTeam(dir, "Codex");
+    expect(getActiveTeam(dir, "Codex")).toBeUndefined();
   });
 });
