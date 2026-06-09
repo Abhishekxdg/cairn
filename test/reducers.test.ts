@@ -1,6 +1,7 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { memStore, cleanupAll } from "./helpers.js";
 import { foldState } from "../src/reducers/index.js";
+import { anchors } from "../src/engines/state.js";
 
 afterAll(cleanupAll);
 
@@ -111,6 +112,49 @@ describe("more lifecycle edges", () => {
     s.appendEvent({ type: "task.created", payload: { id: "t1", title: "A" } });
     s.appendEvent({ type: "task.archived", payload: { id: "t1" } });
     expect(stateOf(s).tasks[0]?.status).toBe("archived");
+  });
+
+  it("anchors: flag flows from payload; durable is an alias; default is false", () => {
+    const s = memStore();
+    s.appendEvent({ type: "decision.made", payload: { id: "d1", title: "Anchored", anchor: true } });
+    s.appendEvent({ type: "knowledge.learned", payload: { id: "k1", statement: "durable flag", durable: true } });
+    s.appendEvent({ type: "knowledge.learned", payload: { id: "k2", statement: "anchor flag", anchor: true } });
+    s.appendEvent({ type: "decision.made", payload: { id: "d0", title: "ordinary" } });
+    s.appendEvent({ type: "knowledge.learned", payload: { id: "k0", statement: "ordinary" } });
+    const st = stateOf(s);
+    expect(st.decisions.find((d) => d.id === "d1")?.anchor).toBe(true);
+    expect(st.decisions.find((d) => d.id === "d0")?.anchor).toBe(false);
+    expect(st.knowledge.find((k) => k.id === "k1")?.anchor).toBe(true);
+    expect(st.knowledge.find((k) => k.id === "k2")?.anchor).toBe(true);
+    expect(st.knowledge.find((k) => k.id === "k0")?.anchor).toBe(false);
+    // anchors() lists decisions first, then knowledge — only the anchored ones.
+    expect(anchors(st).map((a) => `${a.kind}:${a.id}`)).toEqual(["decision:d1", "knowledge:k1", "knowledge:k2"]);
+  });
+
+  it("anchors rank by weight desc, then recency, then decisions first", () => {
+    const s = memStore();
+    s.appendEvent({ type: "knowledge.learned", payload: { id: "low", statement: "low", anchor: true, weight: 1 }, timestamp: "2026-01-01T00:00:00.000Z" });
+    s.appendEvent({ type: "knowledge.learned", payload: { id: "high", statement: "high", anchor: true, weight: 9 }, timestamp: "2026-01-02T00:00:00.000Z" });
+    s.appendEvent({ type: "decision.made", payload: { id: "decOld", title: "decOld", anchor: true, weight: 5 }, timestamp: "2026-01-03T00:00:00.000Z" });
+    s.appendEvent({ type: "knowledge.learned", payload: { id: "knNew", statement: "knNew", anchor: true, weight: 5 }, timestamp: "2026-01-04T00:00:00.000Z" });
+    const ranked = anchors(stateOf(s)).map((a) => a.id);
+    // 9 first; then the two weight-5 (newer knNew before older decOld); then weight-1.
+    expect(ranked).toEqual(["high", "knNew", "decOld", "low"]);
+  });
+
+  it("anchor weight defaults to 0 when absent", () => {
+    const s = memStore();
+    s.appendEvent({ type: "knowledge.learned", payload: { id: "k1", statement: "no weight", anchor: true } });
+    expect(stateOf(s).knowledge.find((k) => k.id === "k1")?.weight).toBe(0);
+  });
+
+  it("anchors drop when the underlying decision is superseded or knowledge invalidated", () => {
+    const s = memStore();
+    s.appendEvent({ type: "decision.made", payload: { id: "d1", title: "Old", anchor: true } });
+    s.appendEvent({ type: "decision.made", payload: { id: "d2", title: "New", supersedes: "d1" } });
+    s.appendEvent({ type: "knowledge.learned", payload: { id: "k1", statement: "stale", anchor: true } });
+    s.appendEvent({ type: "knowledge.invalidated", payload: { id: "k1" } });
+    expect(anchors(stateOf(s))).toEqual([]); // both fell out of force → no longer anchored
   });
 
   it("explicit decision.superseded and decision.archived", () => {

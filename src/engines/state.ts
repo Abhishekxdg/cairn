@@ -1,5 +1,5 @@
 import type { EventStore } from "../core/store.js";
-import type { DerivedState } from "../core/types.js";
+import type { Anchor, DerivedState } from "../core/types.js";
 import {
   applyEvent,
   builderFromState,
@@ -77,6 +77,43 @@ export function activeDecisions(state: DerivedState) {
 /** Goals not archived. */
 export function activeGoals(state: DerivedState) {
   return state.goals.filter((g) => g.status === "active");
+}
+
+/**
+ * Foundational facts that must survive into every context (the memory-residual
+ * "shortcut wire"): anchored decisions still in force + anchored/durable
+ * knowledge still valid.
+ *
+ * Ranked so that when anchors out-grow the budget the RIGHT ones survive:
+ * higher `weight` first, then more recent, then decisions before knowledge
+ * (a stable, deterministic tiebreak). Equal-weight anchors keep the old
+ * decisions-then-knowledge feel via the final tiebreak.
+ */
+export function anchors(state: DerivedState): Anchor[] {
+  const out: Anchor[] = [];
+  for (const d of state.decisions) {
+    if (d.anchor && d.status === "active") {
+      out.push({
+        kind: "decision",
+        id: d.id,
+        text: d.rationale ? `${d.title} — ${d.rationale}` : d.title,
+        weight: d.weight ?? 0,
+        at: d.createdAt,
+      });
+    }
+  }
+  for (const k of state.knowledge) {
+    if (k.anchor && k.valid) {
+      out.push({ kind: "knowledge", id: k.id, text: k.statement, weight: k.weight ?? 0, at: k.createdAt });
+    }
+  }
+  out.sort(
+    (a, b) =>
+      b.weight - a.weight ||
+      b.at.localeCompare(a.at) ||
+      (a.kind === b.kind ? 0 : a.kind === "decision" ? -1 : 1),
+  );
+  return out;
 }
 
 /** Agents considered live right now. */

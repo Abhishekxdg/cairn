@@ -12,7 +12,7 @@ import type {
   Task,
   Decision,
 } from "../core/types.js";
-import { deriveState } from "../engines/state.js";
+import { deriveState, anchors } from "../engines/state.js";
 import {
   compileContext,
   type CompiledContext,
@@ -376,6 +376,10 @@ export class AgentJournal {
     rationale?: string;
     supersedes?: string;
     id?: string;
+    /** Anchor: carry this decision into every context, never trimmed. */
+    anchor?: boolean;
+    /** Anchor priority (higher = kept first when anchors compete for budget). */
+    weight?: number;
   }): { id: string } {
     const id = input.id ?? shortId("dec");
     this.append("decision.made", {
@@ -383,6 +387,8 @@ export class AgentJournal {
       title: input.title,
       ...(input.rationale ? { rationale: input.rationale } : {}),
       ...(input.supersedes ? { supersedes: input.supersedes } : {}),
+      ...(input.anchor ? { anchor: true } : {}),
+      ...(input.weight ? { weight: input.weight } : {}),
       madeBy: this.actor,
     });
     return { id };
@@ -391,14 +397,30 @@ export class AgentJournal {
     return this.append("decision.reverted", { id });
   }
 
-  learn(statement: string, source?: string): { id: string } {
+  learn(statement: string, source?: string, opts: { anchor?: boolean; weight?: number } = {}): { id: string } {
     const id = shortId("kn");
     this.append("knowledge.learned", {
       id,
       statement,
       ...(source ? { source } : {}),
+      ...(opts.anchor ? { anchor: true } : {}),
+      ...(opts.weight ? { weight: opts.weight } : {}),
     });
     return { id };
+  }
+
+  /**
+   * Record a durable, foundational fact (memory residual). Identical to
+   * {@link learn} but anchored: it is carried into every compiled context and
+   * (up to the anchor budget, highest weight first) never dropped.
+   */
+  anchor(statement: string, opts: { source?: string; weight?: number } = {}): { id: string } {
+    return this.learn(statement, opts.source, { anchor: true, ...(opts.weight ? { weight: opts.weight } : {}) });
+  }
+
+  /** All in-force anchors, ranked highest-weight first. */
+  getAnchors(): ReturnType<typeof anchors> {
+    return anchors(this.getState());
   }
 
   recordMemory(content: string, tags: string[] = []): { id: string } {

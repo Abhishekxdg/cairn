@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace-manifest.json",
+  "name": "cairn",
+  "owner": { "name": "memxai" },
+  "description": "Cairn — shared, git-like memory for AI agents.",
+  "plugins": [
+    {
+      "name": "cairn",
+      "source": "./plugin/cairn",
+      "description": "Auto-inject project context at session start, journal over MCP, recall/anchor/status/setup slash commands.",
+      "category": "Productivity",
+      "keywords": ["memory", "journal", "context", "mcp"]
+    }
+  ]
+}

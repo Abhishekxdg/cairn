@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { memStore, cleanupAll } from "./helpers.js";
-import { deriveState, activeTasks, activeDecisions } from "../src/engines/state.js";
+import { deriveState, activeTasks, activeDecisions, anchors } from "../src/engines/state.js";
 import { createSnapshot } from "../src/engines/snapshots.js";
 
 afterAll(cleanupAll);
@@ -42,5 +42,20 @@ describe("state engine snapshot acceleration", () => {
     const st = deriveState(s);
     expect(activeTasks(st)).toHaveLength(1);
     expect(activeDecisions(st)).toHaveLength(1);
+  });
+
+  it("anchors survive the snapshot+tail fast path identically to full replay", () => {
+    const s = memStore();
+    s.appendEvent({ type: "decision.made", payload: { id: "d1", title: "PKCE", anchor: true } });
+    s.appendEvent({ type: "knowledge.learned", payload: { id: "k1", statement: "allowlist URIs", anchor: true } });
+    // Snapshot caches the anchor flag; the tail must not lose it on rehydrate.
+    createSnapshot(s, deriveState(s, { fromScratch: true }));
+    s.appendEvent({ type: "knowledge.learned", payload: { id: "k2", statement: "post-snapshot fact", anchor: true } });
+
+    const accelerated = anchors(deriveState(s)); // snapshot + tail
+    const scratch = anchors(deriveState(s, { fromScratch: true })); // full replay
+    expect(accelerated).toEqual(scratch); // fast path == full replay (the real invariant)
+    // All three anchors survive (order is weight/recency-ranked, so compare as a set).
+    expect(accelerated.map((a) => a.id).sort()).toEqual(["d1", "k1", "k2"]);
   });
 });

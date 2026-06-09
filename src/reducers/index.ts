@@ -49,6 +49,9 @@ class Builder {
 function str(v: unknown, fallback = ""): string {
   return typeof v === "string" ? v : fallback;
 }
+function num(v: unknown, fallback = 0): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
 function arr(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
@@ -163,6 +166,8 @@ function applyEvent(b: Builder, ev: JournalEvent): void {
         madeBy: str(p["madeBy"], ev.actor),
         supersededBy: null,
         supersedes,
+        anchor: p["anchor"] === true,
+        weight: num(p["weight"]),
         createdAt: at,
         updatedAt: at,
       });
@@ -258,6 +263,8 @@ function applyEvent(b: Builder, ev: JournalEvent): void {
         statement: str(p["statement"] ?? p["text"]),
         source: str(p["source"], ev.actor),
         valid: true,
+        anchor: p["anchor"] === true || p["durable"] === true,
+        weight: num(p["weight"]),
         createdAt: at,
         updatedAt: at,
       });

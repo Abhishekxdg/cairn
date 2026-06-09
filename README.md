@@ -75,6 +75,29 @@ No accounts, no telemetry, no cloud. The source of truth is a line-based
 SQLite cache is git-ignored and rebuilt deterministically from it — delete every
 cache and you lose nothing.
 
+### 5. Memory that doesn't decay — anchor the facts that matter
+
+Long journals have a recency problem: the freshest events crowd out the
+foundational ones. *"Prod is a read-replica — never write to it"* was logged 3,000
+events ago, so a cold agent never sees it… and writes to prod.
+
+Cairn defends against this on two levels:
+
+- **Relevance over recency.** Recent activity is ranked by relevance to the current
+  goal and decisions, not just timestamp — so a critical old fact can out-rank fresh
+  noise and survive into context (proven to a depth of 2,000 events in the eval).
+- **Anchors** — for the facts that must *never* fall off, pin them. Anchored facts
+  get a guaranteed slot in every `CONTEXT.md`, ranked by weight, and are never
+  trimmed under the token budget.
+
+```bash
+cairn anchor "prod DB is a read-replica — never write to it" --weight 9
+cairn anchors        # everything pinned, highest weight first
+```
+
+Pin too many and the lowest-priority ones collapse to a `+N more` pointer instead
+of blowing the budget — graceful degradation, not silent loss.
+
 ---
 
 ## Benchmarks — with vs without Cairn
@@ -128,55 +151,78 @@ difference being journal access:
 Without the journal a capable agent was *faster at being wrong*. That's the failure
 Cairn removes.
 
+### Memory that survives the noise (anchors)
+
+`CONTEXT.md` has a token budget, so under pressure something has to be dropped — the
+question is *what*. A foundational fact buried under churn must not be the thing that
+falls off. Measured with `npm run eval:anchors`:
+
+| Foundational facts retained | Recency-only | With anchors |
+|---|---|---|
+| Mean survival under budget pressure | **36%** | **100%** |
+| "Always kept" (15 budget × noise cells) | 0 / 15 | **15 / 15** |
+| Critical fact buried 1,000 events deep | ❌ lost | ✅ kept |
+
+And it stays within budget even when you over-pin:
+
+| Pinning 200 facts vs a 1,500-token budget | Naive (all pins sacred) | Cairn (ranked sub-budget) |
+|---|---|---|
+| Fits the budget? | ❌ overflows ~2× | ✅ within budget |
+| Highest-priority fact | — | ✅ always kept |
+| Overflow behaviour | breaks the ceiling | → `+N more` pointer |
+
+> **Reproduce the full system eval** — 10 scenarios, 29 invariant checks across
+> token-efficiency, snapshot acceleration, relevance, anchors, compaction, budget,
+> scaling and determinism: `npm run eval`.
+
 ---
 
 ## Setup guide
 
-### 1. Install globally
+Pick the path that matches how you work. Both leave you with the same `.agent/`
+journal.
+
+### Option A — Claude Code plugin (one click, recommended)
+
+In Claude Code:
+
+```text
+/plugin marketplace add memxai/cairn
+/plugin install cairn@cairn
+```
+
+That wires everything in one step: the journal over **MCP**, a **SessionStart hook**
+that auto-injects `CONTEXT.md` so every session starts oriented, and the
+`/cairn:recall`, `/cairn:anchor`, `/cairn:status`, `/cairn:setup` slash commands. No
+shell setup, no global install. (The MCP server runs via `npx`, so the `cairn`
+binary is fetched on demand.)
+
+### Option B — npm + one command
 
 ```bash
 npm install -g @memxai/cairn
+cairn quickstart
 ```
 
-The install is silent — it runs no setup, writes nothing to your repos, and does
-not edit your shell config. If your npm global bin directory isn't on your
-`PATH`, add it yourself or use your Node version manager's shell setup.
+`cairn quickstart` is an interactive wizard: it wires the global agent bootstrap and
+sets up the current repo (journal + rules + git hook + code graph) — arrow keys,
+one screen, sensible defaults. Prefer no prompts? `cairn setup --yes`.
 
-### 2. Activate `cairn` in your shell
+> **Even fewer steps:** `npm install -g @memxai/cairn` *auto-runs* the global
+> bootstrap, and installing Cairn inside a project auto-sets-up that repo. Opt out
+> any time with `CAIRN_NO_AUTO_SETUP=1`. CI is skipped automatically.
 
-```bash
-source ~/.zshrc        # or just open a new terminal
-cairn --version
-```
+If your npm global bin directory isn't on your `PATH`, add it (or use your Node
+version manager's shell setup) and re-open the terminal.
 
-### 3. Turn on the agent bootstrap (once per machine)
-
-```bash
-cairn install-global
-```
-
-This adds one rule to your agents' existing instruction files
-(`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`, …): *on its
-first action in a repo that has no `.agent/`, the agent **asks you** whether to set
-up Cairn. Only if you say yes does it run `cairn setup` and build the code graph
-(`cairn index`).* No silent mutation, no MCP wiring. Your own content in those files
-is preserved (Cairn lives in a managed block).
-
-### 4. Set up a project
-
-Let the agent prompt you on its next action — or do it yourself:
-
-```bash
-cd your-project
-cairn setup            # creates .agent/ journal + code graph + git post-commit hook
-```
-
-### 5. Day to day
+### Day to day
 
 ```bash
 cairn recall                       # "where were we" — start every session with this
 cairn status                       # goal, active tasks, decisions
 cairn relevant "fix oauth refresh" # which files a task touches (no grep)
+cairn anchor "never write to prod" # pin a durable fact into every context
+cairn anchors                      # list pinned facts, highest weight first
 cairn timeline                     # what happened, by day
 ```
 
@@ -221,6 +267,26 @@ cairn append --type task.completed  --payload '{"id":"t1"}'                     
 
 File changes are captured from git automatically — agents never log those.
 
+### Anchor the facts that must never be forgotten
+
+Some facts are load-bearing — a prod constraint, a hard security rule, an
+irreversible architectural decision. Pin them so they ride in **every** future
+`CONTEXT.md`, ranked by weight, never trimmed under budget:
+
+```bash
+cairn anchor "auth tokens are httpOnly cookies — never localStorage" --weight 8
+cairn anchor "redirect URIs must be allowlisted in the provider console"
+cairn anchors                              # review what's pinned
+```
+
+A decision can be anchored at the source, too:
+
+```bash
+cairn append --type decision.made \
+  --payload '{"title":"Single-writer to prod","rationale":"replica lag","anchor":true,"weight":9}' \
+  --actor "Claude Code"
+```
+
 ### Find the right files without grepping blind
 
 Cairn ranks which files a task likely touches by fusing git history (files that
@@ -246,7 +312,10 @@ const { id } = journal.createTask({ title: "Build OAuth", priority: "high" });
 journal.startTask(id);
 journal.decide({ title: "Use SQLite", rationale: "WAL concurrency" });
 
-const ctx = journal.getContext("small");   // compiled, minimum-token
+journal.anchor("never write to prod — read-replica", { weight: 9 }); // pin a durable fact
+journal.getAnchors();                       // ranked, highest weight first
+
+const ctx = journal.getContext("small");   // compiled, minimum-token (includes anchors)
 journal.completeTask(id);
 ```
 
@@ -263,8 +332,8 @@ Tools: `append_event`, `query_state`, `query_context`, `query_memory`,
 ## CLI
 
 ```text
-cairn recall | status | context | relevant | append | timeline | sync
-      | setup | install-global | uninstall-global | upgrade
+cairn quickstart | recall | status | context | relevant | anchor | anchors | append
+      | timeline | sync | setup | install-global | uninstall-global | upgrade
       | snapshot | compact | prune | export | doctor | migrate | repair | mcp
 ```
 

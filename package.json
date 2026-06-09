@@ -1,6 +1,6 @@
 {
   "name": "@memxai/cairn",
-  "version": "0.1.12",
+  "version": "0.2.0",
   "description": "Cairn — an append-only journal for AI agents. Git-like memory, without the complexity.",
   "publishConfig": {
     "access": "public"
@@ -73,7 +73,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "cairn": "node bin/cairn.js",
     "wedge": "node scripts/wedge-eval.mjs",
-    "wedge:tokens": "npm run build && node scripts/wedge-tokens.mjs"
+    "wedge:tokens": "npm run build && node scripts/wedge-tokens.mjs",
+    "eval": "tsx eval/cairn.eval.ts",
+    "eval:anchors": "tsx eval/anchors.eval.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
@@ -84,6 +86,7 @@
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^22.10.0",
     "@vitest/coverage-v8": "^2.1.9",
+    "tsx": "^4.22.4",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }

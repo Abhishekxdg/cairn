@@ -1,0 +1,18 @@
+{
+  "name": "cairn",
+  "displayName": "Cairn",
+  "version": "0.2.0",
+  "description": "Shared, git-like memory for AI agents. Auto-injects project context at session start, exposes the journal over MCP, and adds recall/anchor slash commands.",
+  "author": { "name": "memxai" },
+  "homepage": "https://github.com/memxai/cairn",
+  "repository": "https://github.com/memxai/cairn",
+  "license": "Apache-2.0",
+  "keywords": ["memory", "journal", "context", "state", "mcp"],
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": {
+    "cairn": {
+      "command": "npx",
+      "args": ["-y", "@memxai/cairn", "mcp"]
+    }
+  }
+}

@@ -4,7 +4,7 @@ import { findRoot, requireRoot, agentPaths } from "../core/paths.js";
 import { EventStore } from "../core/store.js";
 import { migrate, currentVersion, SCHEMA_VERSION } from "../core/schema.js";
 import { health, validateIntegrity, repair } from "../engines/observability.js";
-import { deriveState, activeTasks, activeDecisions, activeGoals } from "../engines/state.js";
+import { deriveState, activeTasks, activeDecisions, activeGoals, anchors as deriveAnchors } from "../engines/state.js";
 import { compileContext, type ContextLevel } from "../engines/context.js";
 import { rankFiles, compileTaskContext } from "../engines/relevance.js";
 import { indexRepo } from "../engines/codegraph.js";
@@ -22,6 +22,7 @@ import { setupProject, refreshProjectRules } from "../setup/install.js";
 import { installGlobal, uninstallGlobal, refreshGlobalRules } from "../setup/global.js";
 import { notifyIfUpdate } from "../engines/update.js";
 import { renderProjectSetup, renderGlobalSetup } from "./screens.js";
+import { runQuickstart } from "./wizard.js";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -80,13 +81,16 @@ ${c.bold("USAGE")}
   cairn <command> [args] [--flags]
 
 ${c.bold("COMMANDS")}
+  quickstart                 Interactive one-shot setup (global bootstrap + this repo)
   init                       Create a .agent/ journal + teach coding agents
-  setup                      Re-teach coding agents (writes Cairn rules to their files)
+  setup                      Set up this repo (interactive on a TTY; --yes to skip prompts)
   install-global             Wire global agent rules so agents self-setup every repo
   uninstall-global           Remove the global bootstrap rules
   upgrade                    Update cairn globally + refresh agent rules
   status                     Show derived project state
   append --type T            Append an event (--payload '<json>' --actor N)
+  anchor "<fact>"            Pin a durable fact into every context (--weight N to rank)
+  anchors                    List pinned anchors, highest weight first (--json)
   state                      Print full derived state (JSON)
   timeline                   Human-readable timeline (--since <seq> --type T)
   recall                     Instant "where were we" (also written to .agent/CONTEXT.md)
@@ -178,11 +182,22 @@ const commands: Record<string, Handler> = {
     out(c.dim("  In each repo, the next `cairn sync` (post-commit) refreshes its rules."));
   },
 
-  setup(_rest, flags) {
+  async quickstart(_rest, _flags) {
+    // The friendly front door: interactive wizard on a TTY, recommended defaults
+    // otherwise. Wires the global bootstrap AND this repo in one command.
+    await runQuickstart(process.cwd());
+  },
+
+  async setup(_rest, flags) {
     const cwd = process.cwd();
+    // On a real terminal, run the interactive wizard unless told to stay quiet
+    // (`--yes`/`--json`/`--quiet`). Piped/agent/CI invocations skip straight to
+    // the non-interactive path so automation is never blocked on a prompt.
+    const interactive = process.stdin.isTTY && process.stdout.isTTY
+      && !flags["yes"] && !flags["json"] && !flags["quiet"];
+    if (interactive) { await runQuickstart(cwd); return; }
     // Running `cairn setup` IS consent, so build the code graph by default
-    // (`--no-index` to skip). This is the fallback path postinstall points at
-    // when it couldn't prompt (no TTY).
+    // (`--no-index` to skip). This is the fallback path postinstall points at.
     const r = setupProject(cwd, { all: Boolean(flags["all"]), buildIndex: !flags["no-index"] });
     if (flags["json"]) return out(JSON.stringify(r, null, 2));
     out(renderProjectSetup(r));
@@ -237,6 +252,39 @@ const commands: Record<string, Handler> = {
       else out(c.green(`✔ ${ev.type} ${c.gray(`#${ev.seq} ${ev.id}`)}`));
     } finally {
       journal.close();
+    }
+  },
+
+  anchor(rest, flags) {
+    const statement = (fstr(flags, "statement") ?? rest.join(" ")).trim();
+    if (!statement) throw new Error('anchor requires a fact, e.g. cairn anchor "redirect URIs must be allowlisted"');
+    const weight = fstr(flags, "weight") ? Number(fstr(flags, "weight")) : undefined;
+    if (weight !== undefined && !Number.isFinite(weight)) throw new Error("--weight must be a number");
+    const journal = new AgentJournal({ actor: actorOf(flags) });
+    try {
+      const { id } = journal.anchor(statement, {
+        ...(fstr(flags, "source") ? { source: fstr(flags, "source")! } : {}),
+        ...(weight !== undefined ? { weight } : {}),
+      });
+      if (flags["json"]) out(JSON.stringify({ id, statement, anchor: true, weight: weight ?? 0 }, null, 2));
+      else out(c.green(`⚓ anchored ${c.gray(`#${id}`)}${weight ? c.gray(` w${weight}`) : ""} — ${statement}`));
+    } finally {
+      journal.close();
+    }
+  },
+
+  anchors(_rest, flags) {
+    const store = openStore();
+    try {
+      const list = deriveAnchors(deriveState(store));
+      if (flags["json"]) return out(JSON.stringify(list, null, 2));
+      if (!list.length) return out(c.dim("No anchors. Pin one with: cairn anchor \"<durable fact>\""));
+      out(c.bold(`⚓ ${list.length} anchor${list.length === 1 ? "" : "s"} (highest weight first)`));
+      for (const a of list) {
+        out(`  ${c.gray(`w${a.weight}`)} (${a.kind}) ${a.text} ${c.gray(`#${a.id}`)}`);
+      }
+    } finally {
+      store.close();
     }
   },
 

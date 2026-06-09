@@ -151,6 +151,14 @@ export interface Decision {
   supersededBy: string | null;
   /** The decision id this one supersedes, if any. */
   supersedes: string | null;
+  /**
+   * Anchored decisions are foundational: they get a guaranteed "shortcut" into
+   * every compiled context and are never dropped under budget pressure (the
+   * memory-residual idea — early signal must survive to the last layer).
+   */
+  anchor: boolean;
+  /** Anchor priority (higher = kept first when anchors compete for budget). */
+  weight: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -195,6 +203,13 @@ export interface Knowledge {
   statement: string;
   source: string;
   valid: boolean;
+  /**
+   * Anchored (durable) knowledge is carried into every compiled context and
+   * never dropped under budget pressure — see {@link Decision.anchor}.
+   */
+  anchor: boolean;
+  /** Anchor priority (higher = kept first when anchors compete for budget). */
+  weight: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -283,6 +298,16 @@ export interface TaskContext {
   relatedKnowledge: Array<{ statement: string; source: string }>;
   asOfSeq: number;
   generatedAt: string;
+}
+
+/** A foundational fact carried into context as a "residual" — never dropped. */
+export interface Anchor {
+  kind: "decision" | "knowledge";
+  id: string;
+  text: string;
+  /** Priority used to rank anchors when they compete for the anchor budget. */
+  weight: number;
+  at: string;
 }
 
 /** Project manifest stored at `.agent/manifest.json`. */

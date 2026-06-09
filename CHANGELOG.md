@@ -4,7 +4,53 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0]
+
+### Added
+
+- **Claude Code plugin.** Install Cairn in one step:
+  `/plugin marketplace add memxai/cairn` then `/plugin install cairn@cairn`. Wires
+  the journal over MCP (via `npx`, no global install required), a SessionStart hook
+  that auto-injects `CONTEXT.md`, and `/cairn:recall|anchor|status|setup` commands.
+  Lives in `plugin/cairn/` with a repo-root `.claude-plugin/marketplace.json`.
+- **`cairn quickstart` — interactive setup wizard.** A zero-dependency arrow-key TUI
+  (`src/cli/wizard.ts`) that wires the global bootstrap and sets up the current repo
+  in one screen. `cairn setup` now launches it automatically on a TTY; `--yes` keeps
+  the old non-interactive path for scripts and agents.
+- **Automatic setup on install.** `npm install -g @memxai/cairn` now wires the global
+  agent bootstrap automatically, and installing Cairn inside a project sets up that
+  repo — no `CAIRN_SETUP=1` opt-in needed. Opt out with `CAIRN_NO_AUTO_SETUP=1`; CI is
+  skipped automatically (the git hook's auto-commit is wrong for pipelines).
+- **Anchors — memory that doesn't decay.** Pin a foundational fact and it rides in
+  every compiled `CONTEXT.md`, ranked by `weight`, never trimmed under the token
+  budget. `cairn anchor "<fact>" [--weight N]` and `cairn anchors` (list, highest
+  weight first); SDK `journal.anchor(statement, { weight })` / `getAnchors()`;
+  `decide({ anchor, weight })` and any `decision.made`/`knowledge.learned` event
+  with `anchor:true` (or `durable:true`). When anchors out-grow their sub-budget
+  (≤50% of the total) the lowest-weight ones collapse to a `+N more` pointer
+  instead of blowing the ceiling. Eval `npm run eval:anchors`: foundational-fact
+  retention under budget pressure rises from **36% → 100%** (0/15 → 15/15
+  "always-kept" cells).
+- **Deep full-system eval harness.** `npm run eval` runs 10 scenarios / 29 invariant
+  checks across token-efficiency, snapshot acceleration, relevance, anchors,
+  code-graph, compaction, budget adherence, scaling and determinism
+  (`eval/cairn.eval.ts`, `eval/anchors.eval.ts`).
+
+### Changed
+
+- **Relevance over recency, wider reach.** Recent-activity ranking now considers a
+  bounded candidate pool of the newest `RELEVANCE_POOL` (2000) events, so a fact
+  highly relevant to the current goal/decisions can out-rank fresh noise and survive
+  into context up to ~2000 events deep (was ~72). Cost stays flat at scale
+  (+~8 ms at 50k events); facts older than the pool are kept alive by anchors.
+
+### Fixed
+
+- **Recall token budget is now hard.** Over-long spine lines (goal/current/anchor)
+  are clipped to `MAX_SPINE_LINE` (140 chars), and an emergency minimal-mode
+  degradation guarantees `cairn recall` stays within budget down to a ~24-token
+  skeleton floor — previously a pathologically long goal or a flood of pins could
+  overflow the ceiling.
 
 ### Changed
 

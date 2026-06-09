@@ -36,6 +36,21 @@ describe("AgentJournal SDK", () => {
     j.close();
   });
 
+  it("anchor() and decide({anchor}) surface foundational facts in compiled context", () => {
+    const j = journal();
+    j.createGoal({ title: "Ship OAuth" });
+    j.decide({ title: "Use PKCE", rationale: "public client", anchor: true });
+    j.anchor("redirect URIs must be allowlisted");
+    j.learn("ordinary fact"); // not anchored
+    const ctx = j.getContext("small");
+    expect(ctx.anchors).toHaveLength(2);
+    expect(ctx.anchors.map((a) => a.kind).sort()).toEqual(["decision", "knowledge"]);
+    expect(ctx.anchors.some((a) => a.text.includes("Use PKCE"))).toBe(true);
+    expect(ctx.anchors.some((a) => a.text.includes("allowlisted"))).toBe(true);
+    expect(ctx.anchors.some((a) => a.text.includes("ordinary"))).toBe(false);
+    j.close();
+  });
+
   it("compiles context and logs a context.generated event", () => {
     const j = journal();
     j.createGoal({ title: "Ship" });

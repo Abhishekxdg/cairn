@@ -1,6 +1,6 @@
 import type { EventStore } from "../core/store.js";
-import type { DerivedState, Task } from "../core/types.js";
-import { deriveState, activeTasks, activeDecisions, activeGoals } from "./state.js";
+import type { Anchor, DerivedState, Task } from "../core/types.js";
+import { deriveState, activeTasks, activeDecisions, activeGoals, anchors } from "./state.js";
 import { timelineEntries, type TimelineEntry } from "./timeline.js";
 import { tokenize } from "./relevance.js";
 
@@ -15,6 +15,14 @@ import { tokenize } from "./relevance.js";
 
 export type ContextLevel = "small" | "medium" | "large" | "full";
 
+/**
+ * Candidate-pool size for relevance re-ranking of recent activity. A highly
+ * relevant fact within the newest RELEVANCE_POOL events can out-rank fresh noise
+ * and survive into context; older than that, only an anchor rescues it. Bounded
+ * (not the whole journal) so compile cost stays flat as the journal grows.
+ */
+export const RELEVANCE_POOL = 2000;
+
 export interface CompiledContext {
   level: ContextLevel;
   projectId: string;
@@ -22,6 +30,8 @@ export interface CompiledContext {
   currentTask: { id: string; title: string; status: string; owner: string } | null;
   activeTasks: Array<{ id: string; title: string; status: string; owner: string; priority: string }>;
   activeDecisions: Array<{ id: string; title: string; rationale: string; at: string }>;
+  /** Foundational facts carried in as residuals — always present, never trimmed. */
+  anchors: Anchor[];
   recentActivity: Array<{ at: string; actor: string; summary: string }>;
   activeAgents: string[];
   recommendedNextActions: string[];
@@ -132,9 +142,14 @@ export function compileContext(
 
   const goal = activeGoals(state)[0]?.title ?? "";
 
-  // Pull a WIDER window than we'll keep, then rank by relevance to the current
-  // work so a critical old fact can survive over fresh noise (not pure recency).
-  const window = Math.max(Number.isFinite(limit.activity) ? limit.activity * 6 : 100, 30);
+  // Pull a WIDE candidate pool, then rank by relevance to the current work so a
+  // critical OLD fact can survive over fresh noise (not pure recency). The pool
+  // must be large enough that a highly-relevant old event is even a CANDIDATE —
+  // a small recency window silently excludes it. The pool is bounded (not the
+  // whole journal) so compile cost stays flat at scale; facts older than the
+  // pool are rescued by anchors, not by re-ranking. See RELEVANCE_POOL.
+  const recencyFloor = Math.max(Number.isFinite(limit.activity) ? limit.activity * 6 : 100, 30);
+  const window = Math.max(recencyFloor, RELEVANCE_POOL);
   const recentEvents = store.queryEvents({ order: "desc", limit: window });
   const orientationQuery = [
     goal,
@@ -166,6 +181,7 @@ export function compileContext(
     activeDecisions: activeDecisions(state)
       .slice(0, Number.isFinite(limit.decisions) ? limit.decisions : undefined)
       .map((d) => ({ id: d.id, title: d.title, rationale: d.rationale, at: d.createdAt })),
+    anchors: anchors(state),
     recentActivity: recent.map((e) => ({
       at: e.timestamp,
       actor: e.actor,

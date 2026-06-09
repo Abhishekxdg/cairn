@@ -30,6 +30,19 @@ describe("cairn CLI", () => {
     expect((await cli([])).stdout).toContain("Cairn");
   });
 
+  it("setup --yes is non-interactive and reports the repo is ready", async () => {
+    const dir = tempDir();
+    const r = await cli(["setup", "--yes"], dir);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("Cairn — project ready");
+    // --yes must not drop into the wizard / hang waiting on a prompt.
+    expect(r.stdout).not.toContain("How would you like to set up");
+  });
+
+  it("help advertises the quickstart command", async () => {
+    expect((await cli([])).stdout).toContain("quickstart");
+  });
+
   it("init → append → status → state", async () => {
     const dir = tempDir();
     expect((await cli(["init"], dir)).stdout).toContain("created shared memory");
@@ -59,6 +72,34 @@ describe("cairn CLI", () => {
 
     const exp = await cli(["export"], dir);
     expect(Array.isArray(JSON.parse(exp.stdout))).toBe(true);
+  });
+
+  it("anchor pins a durable fact that lands in recall", async () => {
+    const dir = tempDir();
+    await cli(["init"], dir);
+    const r = await cli(["anchor", "redirect URIs must be allowlisted", "--json"], dir);
+    expect(JSON.parse(r.stdout)).toMatchObject({ anchor: true, statement: "redirect URIs must be allowlisted" });
+    expect((await cli(["recall"], dir)).stdout).toContain("Anchors:");
+    expect((await cli(["recall"], dir)).stdout).toContain("redirect URIs must be allowlisted");
+
+    // No fact → clear error, non-zero exit.
+    const empty = await cli(["anchor"], dir);
+    expect(empty.code).not.toBe(0);
+    expect(empty.stderr).toContain("anchor requires");
+  });
+
+  it("anchors list ranks by weight; recall collapses the tail", async () => {
+    const dir = tempDir();
+    await cli(["init"], dir);
+    await cli(["anchor", "low priority note", "--weight", "1"], dir);
+    await cli(["anchor", "critical invariant", "--weight", "9"], dir);
+
+    const list = JSON.parse((await cli(["anchors", "--json"], dir)).stdout);
+    expect(list.map((a: { text: string }) => a.text)).toEqual(["critical invariant", "low priority note"]);
+
+    const human = await cli(["anchors"], dir);
+    expect(human.stdout).toContain("2 anchors");
+    expect(human.stdout).toContain("w9");
   });
 
   it("doctor, migrate, repair, compact, prune", async () => {

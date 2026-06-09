@@ -24,6 +24,25 @@ import { estimateTokens } from "./tokens.js";
 export const DEFAULT_RECALL_BUDGET = 1500;
 
 /**
+ * Fraction of the total budget anchors may consume. Caps the non-droppable
+ * spine so a flood of pins can't starve the rest of the recall; the overflow
+ * collapses to a "+N more" pointer ranked by anchor weight.
+ */
+export const ANCHOR_BUDGET_FRACTION = 0.5;
+
+/** Max characters for a never-dropped spine line (goal/current). Keeps the
+ *  budget floor small so an oversized goal can't blow the token ceiling. */
+export const MAX_SPINE_LINE = 140;
+
+/** Clip a string to `n` chars with an ellipsis, on a word boundary if cheap. */
+function clip(s: string, n: number): string {
+  if (s.length <= n) return s;
+  const cut = s.slice(0, n - 1);
+  const sp = cut.lastIndexOf(" ");
+  return (sp > n * 0.6 ? cut.slice(0, sp) : cut).trimEnd() + "…";
+}
+
+/**
  * Compact relative age (e.g. "2d", "3h", "now") from an ISO timestamp to a
  * reference time. Provenance: showing how OLD a fact is lets the agent judge
  * whether to trust and act on it, instead of reading past it.
@@ -64,24 +83,63 @@ interface Section {
 export function renderRecall(ctx: CompiledContext, opts: RenderOptions = {}): string {
   const budget = opts.budget ?? DEFAULT_RECALL_BUDGET;
 
-  // Always-present spine (never dropped).
+  const now = ctx.generatedAt;
+
+  // Always-present spine (never dropped). Spine lines are CLIPPED so a pathologically
+  // long goal/title can't blow the token ceiling — the spine must stay a small,
+  // bounded floor for the budget to mean anything.
   const head: string[] = [
     "# Where we are",
     "",
-    `Goal: ${ctx.goal || "(none set)"}`,
-    `Current: ${ctx.currentTask ? `${ctx.currentTask.title} (${ctx.currentTask.id})` : "(nothing in progress)"}`,
+    `Goal: ${clip(ctx.goal || "(none set)", MAX_SPINE_LINE)}`,
+    `Current: ${ctx.currentTask ? `${clip(ctx.currentTask.title, MAX_SPINE_LINE)} (${ctx.currentTask.id})` : "(nothing in progress)"}`,
     "",
   ];
 
-  const now = ctx.generatedAt;
+  // Memory residual: foundational facts get a guaranteed shortcut into the doc.
+  // They live in the spine (not the droppable `sections`), so the recency drop
+  // loop can never trim away the early signal — the whole point of an anchor.
+  //
+  // But anchors must not be able to eat the WHOLE budget: with hundreds of pins
+  // the spine would blow past the ceiling. So anchors get a SUB-BUDGET and are
+  // filled in ranked (highest-weight) order; the overflow collapses to a single
+  // "+N more" pointer. Survival becomes "top-ranked pins always present, the
+  // tail discoverable" instead of "all pins or bust".
+  const anchorIds = new Set(ctx.anchors.map((a) => a.id));
+  if (ctx.anchors.length) {
+    const anchorBudget = Math.max(0, Math.floor(budget * ANCHOR_BUDGET_FRACTION));
+    head.push("Anchors:");
+    let used = estimateTokens("Anchors:");
+    let shown = 0;
+    for (const a of ctx.anchors) {
+      const age = a.at ? relAge(a.at, now) : "";
+      const tag = a.kind === "decision" ? "decision" : "fact";
+      const line = `- (${tag}) ${clip(a.text, MAX_SPINE_LINE)}${age ? ` _(${age})_` : ""}`;
+      const cost = estimateTokens(line);
+      // Always show the single highest-ranked anchor; ration the rest.
+      if (shown > 0 && used + cost > anchorBudget) break;
+      head.push(line);
+      used += cost;
+      shown++;
+    }
+    const dropped = ctx.anchors.length - shown;
+    if (dropped > 0) head.push(`- …+${dropped} more anchored (run \`cairn anchors\`)`);
+    head.push("");
+  }
+
   const decisions: Section = { dropRank: 2, lines: ["Active decisions:"] };
-  if (ctx.activeDecisions.length) {
-    for (const d of ctx.activeDecisions) {
+  // Anchored decisions already shown above — don't repeat them here.
+  const droppableDecisions = ctx.activeDecisions.filter((d) => !anchorIds.has(d.id));
+  if (droppableDecisions.length) {
+    for (const d of droppableDecisions) {
       const age = d.at ? relAge(d.at, now) : "";
       const prov = ` _(${d.id}${age ? ` · ${age}` : ""})_`;
       decisions.lines.push(`- ${d.title}${d.rationale ? ` — ${d.rationale}` : ""}${prov}`);
     }
-  } else decisions.lines.push("- (none)");
+  } else {
+    const anchoredDecisions = ctx.anchors.some((a) => a.kind === "decision");
+    decisions.lines.push(anchoredDecisions ? "- (all anchored — see Anchors)" : "- (none)");
+  }
 
   const tasks: Section = { dropRank: 3, lines: ["Open tasks:"] };
   if (ctx.activeTasks.length) {
@@ -143,6 +201,24 @@ export function renderRecall(ctx: CompiledContext, opts: RenderOptions = {}): st
     }
     included = included.filter((s) => s !== victim);
     out = assemble(included);
+  }
+
+  // Emergency spine degradation: if even the bare spine (oversized goal + the
+  // mandatory ≥1 anchor) exceeds the budget, fall back to a minimal doc — just
+  // the goal, clipped to fit — so the budget is HARD down to a tiny skeleton
+  // floor (~the header + a clipped goal + footer), not merely best-effort.
+  if (estimateTokens(out) > budget) {
+    const minimal = (goalText: string): string => {
+      const body = ["# Where we are", `Goal: ${goalText}`].join("\n");
+      return [body, footer(estimateTokens(body))].join("\n") + "\n";
+    };
+    let g = clip(ctx.goal || "(none set)", MAX_SPINE_LINE);
+    let m = minimal(g);
+    while (estimateTokens(m) > budget && g.length > 1) {
+      g = clip(g, Math.max(1, Math.floor(g.length * 0.7)));
+      m = minimal(g);
+    }
+    out = m;
   }
   return out;
 }
