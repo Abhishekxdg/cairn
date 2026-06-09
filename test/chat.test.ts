@@ -2,7 +2,7 @@ import { describe, it, expect, afterAll } from "vitest";
 import { memStore, cleanupAll, tempDir } from "./helpers.js";
 import { sendMessage, inbox } from "../src/engines/chat.js";
 import { history, listTeams } from "../src/engines/chat.js";
-import { setActiveTeam, getActiveTeam, clearActiveTeam } from "../src/engines/chat-membership.js";
+import { setActiveTeam, getActiveTeam, clearActiveTeam, listMembershipTeams } from "../src/engines/chat-membership.js";
 
 afterAll(cleanupAll);
 
@@ -75,5 +75,14 @@ describe("chat membership (session-local active team)", () => {
     expect(getActiveTeam(dir, "Codex")).toBe("frontend");
     clearActiveTeam(dir, "Codex");
     expect(getActiveTeam(dir, "Codex")).toBeUndefined();
+  });
+
+  it("listMembershipTeams returns distinct joined teams across actors", () => {
+    const dir = tempDir();
+    expect(listMembershipTeams(dir)).toEqual([]);
+    setActiveTeam(dir, "Codex", "frontend");
+    setActiveTeam(dir, "Gemini", "backend");
+    setActiveTeam(dir, "Claude", "frontend"); // duplicate team, different actor
+    expect(listMembershipTeams(dir).sort()).toEqual(["backend", "frontend"]);
   });
 });

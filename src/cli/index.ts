@@ -17,7 +17,7 @@ import { compactJournal } from "../engines/compaction.js";
 import { syncGit, gitDrift } from "../engines/gitsync.js";
 import { writeContextFile, renderRecall } from "../engines/recall.js";
 import { sendMessage, inbox, history, listTeams } from "../engines/chat.js";
-import { setActiveTeam, getActiveTeam, clearActiveTeam } from "../engines/chat-membership.js";
+import { setActiveTeam, getActiveTeam, clearActiveTeam, listMembershipTeams } from "../engines/chat-membership.js";
 import { setupProject, refreshProjectRules } from "../setup/install.js";
 import { installGlobal, uninstallGlobal, refreshGlobalRules } from "../setup/global.js";
 import { notifyIfUpdate } from "../engines/update.js";
@@ -402,7 +402,9 @@ const commands: Record<string, Handler> = {
           return;
         }
         case "teams": {
-          const teams = listTeams(store.db, room);
+          const tagged = listTeams(store.db, room);
+          const joined = listMembershipTeams(root);
+          const teams = [...new Set([...tagged, ...joined])].sort();
           if (flags["json"]) return out(JSON.stringify(teams, null, 2));
           out(teams.length ? teams.map((t) => `  ${t}`).join("\n") : c.dim("No teams yet."));
           return;

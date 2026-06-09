@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -34,4 +34,19 @@ export function getActiveTeam(root: string, actor: string): string | undefined {
 
 export function clearActiveTeam(root: string, actor: string): void {
   rmSync(file(root, actor), { force: true });
+}
+
+/** Distinct teams that any actor has joined in this repo (from membership files). */
+export function listMembershipTeams(root: string): string[] {
+  const d = dir(root);
+  if (!existsSync(d)) return [];
+  const teams = new Set<string>();
+  for (const f of readdirSync(d)) {
+    if (!f.startsWith("team-") || !f.endsWith(".json")) continue;
+    try {
+      const team = (JSON.parse(readFileSync(join(d, f), "utf8")) as { team?: string }).team;
+      if (team) teams.add(team);
+    } catch { /* skip unreadable membership file */ }
+  }
+  return [...teams];
 }
