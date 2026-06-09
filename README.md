@@ -2,7 +2,7 @@
 
 **An append-only journal for AI agents. Git-like memory, without the complexity.**
 
-[![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](package.json)
 [![npm](https://img.shields.io/badge/npm-%40memxai%2Fcairn-red.svg)](https://www.npmjs.com/package/@memxai/cairn)
 
@@ -286,6 +286,6 @@ agents ──append──► events.jsonl (source of truth) ──reducers──
 
 ## License
 
-Proprietary — © 2026 memxai. All rights reserved. Installing the package grants a
-limited right to run it for internal use only; no source rights. See
-[LICENSE](LICENSE).
+[Apache License 2.0](LICENSE) — © 2026 memxai. Free to use, modify, and
+distribute, with an explicit patent grant. Contributions are accepted under the
+same license.

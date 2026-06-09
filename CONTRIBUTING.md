@@ -1,6 +1,6 @@
 # Contributing to Cairn
 
-Thanks for helping build the standard memory layer for AI agents.
+Thanks for helping build the open standard for AI agent memory.
 
 ## Setup
 
@@ -57,6 +57,7 @@ npm run typecheck
 npm test
 ```
 
-Keep the docs in sync with behavior. Cairn is proprietary software (© 2026
-memxai). By contributing you assign all right, title and interest in your
-contribution to memxai, and confirm you have the authority to do so.
+Keep the docs in sync with behavior. Cairn is open source under the
+[Apache License 2.0](LICENSE). By submitting a contribution you agree to license it
+under the same terms (inbound = outbound), per section 5 of the license — no
+separate CLA required.

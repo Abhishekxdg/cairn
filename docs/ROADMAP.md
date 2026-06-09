@@ -1,6 +1,6 @@
 # Roadmap
 
-Cairn aims to be the standard memory layer for AI agents. The v0.1
+Cairn aims to be the open standard for AI agent memory. The v0.1
 implementation is a complete vertical slice; the items below deepen it.
 
 ## v0.1 — reference implementation (shipped)
@@ -36,7 +36,7 @@ implementation is a complete vertical slice; the items below deepen it.
 
 - **Python, Go, Rust SDKs** reading/writing the same `.agent/journal.db`.
 - A conformance test suite implementations can run against the JSON export.
-- Formalize the protocol spec (RFC-style) for internal review.
+- Draft the protocol as an open spec (RFC-style) for community review.
 
 ## v0.4 — ecosystem
 
