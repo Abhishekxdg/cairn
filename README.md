@@ -138,10 +138,9 @@ Cairn removes.
 npm install -g @memxai/cairn
 ```
 
-The install is silent — it runs no setup and writes nothing to your repos. If your
-npm global bin directory isn't on your `PATH`, the installer **adds it
-automatically** (a marked block in `~/.zshrc` / `~/.bashrc`; opt out with
-`CAIRN_NO_PATH=1`).
+The install is silent — it runs no setup, writes nothing to your repos, and does
+not edit your shell config. If your npm global bin directory isn't on your
+`PATH`, add it yourself or use your Node version manager's shell setup.
 
 ### 2. Activate `cairn` in your shell
 
@@ -186,7 +185,6 @@ cairn timeline                     # what happened, by day
 ```bash
 cairn uninstall-global             # remove the agent rules from your dotfiles
 npm uninstall -g @memxai/cairn     # remove the package + bins
-# then delete the "# >>> cairn PATH >>>" block from ~/.zshrc
 ```
 
 ### Staying current

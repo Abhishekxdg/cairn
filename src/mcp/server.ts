@@ -11,6 +11,7 @@ import { deriveTimeline, deriveMemory } from "../engines/memory.js";
 import { createSnapshot } from "../engines/snapshots.js";
 import { sendMessage, inbox, listTeams } from "../engines/chat.js";
 import { setupProject } from "../setup/install.js";
+import { VERSION } from "../core/version.js";
 
 /**
  * Cairn MCP server.
@@ -19,8 +20,6 @@ import { setupProject } from "../setup/install.js";
  * OpenHands) can append events and read derived projections from the same
  * source of truth. Operates on the project at `CAIRN_ROOT` (env) or the cwd.
  */
-
-const PKG_VERSION = "0.1.2";
 
 function resolveRoot(): string {
   return process.env["CAIRN_ROOT"] ?? requireRoot();
@@ -61,7 +60,7 @@ function withStore<T>(fn: (s: EventStore) => T): T {
 /** Build (but do not start) the Cairn MCP server. */
 export function createServer(): McpServer {
   const server = new McpServer(
-    { name: "cairn", version: PKG_VERSION },
+    { name: "cairn", version: VERSION },
     {
       instructions:
         "Cairn: the append-only source of truth for this " +

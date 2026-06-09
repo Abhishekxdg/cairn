@@ -1,7 +1,7 @@
 # Agent Rules
 
 This is the exact ruleset Cairn injects into your coding agents' instruction files
-(`AGENTS.md`, `CLAUDE.md`, etc.) during `npm install` / `cairn setup`. It teaches
+(`AGENTS.md`, `CLAUDE.md`, etc.) during `cairn setup`. It teaches
 any agent how and when to use the shared journal — no MCP, just the `cairn` CLI.
 
 It is written into each file inside a managed block:

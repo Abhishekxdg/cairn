@@ -46,6 +46,8 @@
     "README.md",
     "docs",
     "LICENSE",
+    "NOTICE",
+    "!docs/superpowers",
     "!dist/**/*.map"
   ],
   "engines": {

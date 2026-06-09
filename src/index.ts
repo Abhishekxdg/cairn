@@ -21,6 +21,7 @@ export * from "./core/paths.js";
 export * from "./core/manifest.js";
 export { SCHEMA_VERSION, MIGRATIONS, migrate, currentVersion } from "./core/schema.js";
 export { ulid, shortId, nowIso, dateOf } from "./core/ids.js";
+export { VERSION } from "./core/version.js";
 
 // Reducers + engines.
 export * from "./reducers/index.js";
@@ -38,6 +39,3 @@ export * from "./engines/recall.js";
 export * from "./setup/install.js";
 export * from "./setup/global.js";
 export { RULES_BODY, rulesBlock, GLOBAL_RULES_BODY, globalRulesBlock } from "./setup/rules.js";
-
-/** Package version. */
-export const VERSION = "0.1.2";
