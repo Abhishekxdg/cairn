@@ -1,6 +1,5 @@
 import { describe, it, expect, afterAll } from "vitest";
-import { memStore } from "./helpers.js";
-import { cleanupAll } from "./helpers.js";
+import { memStore, cleanupAll } from "./helpers.js";
 
 afterAll(cleanupAll);
 
@@ -16,9 +15,16 @@ describe("chat table migration (v3)", () => {
     );
   });
 
-  it("is idempotent — opening an already-migrated db does not throw", () => {
+  it("applies column defaults — read_by defaults to '[]', nullable cols to null", () => {
     const s = memStore();
-    expect(() => s.db.exec("SELECT 1 FROM chat LIMIT 0")).not.toThrow();
+    s.db
+      .prepare("INSERT INTO chat (id, room, sender, body, ts) VALUES (?, ?, ?, ?, ?)")
+      .run("m1", "proj", "Claude", "hello", 1000);
+    const row = s.db.prepare("SELECT * FROM chat WHERE id = 'm1'").get() as Record<string, unknown>;
     s.close();
+    expect(row.read_by).toBe("[]");
+    expect(row.team).toBeNull();
+    expect(row.recipient).toBeNull();
+    expect(row.body).toBe("hello");
   });
 });
