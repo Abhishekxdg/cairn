@@ -1,4 +1,5 @@
 <!-- CAIRN:BEGIN (managed by cairn — do not edit between markers) -->
+<!-- cairn-rules-version: 2 -->
 ## Cairn — shared project memory
 
 This project has a shared, append-only memory journal in `.agent/`. It is the

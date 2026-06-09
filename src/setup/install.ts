@@ -66,9 +66,15 @@ if [ -z "$CAIRN_SKIP_HOOK" ]; then
   fi
   if [ -z "$CAIRN_NO_AUTOCOMMIT" ]; then
     _cairn_gd=$(git rev-parse --git-dir 2>/dev/null) || _cairn_gd=""
-    if [ -n "$_cairn_gd" ] && [ ! -e "$_cairn_gd/MERGE_HEAD" ] && [ ! -d "$_cairn_gd/rebase-merge" ] && [ ! -d "$_cairn_gd/rebase-apply" ]; then
+    # Only auto-commit when the journal source of truth still exists on disk.
+    # Without this guard, a journal that vanished from the worktree (a stray
+    # checkout/clean) would be committed AS A DELETION by the next "sync journal"
+    # commit — silently destroying the memory this tool exists to protect.
+    if [ -n "$_cairn_gd" ] && [ -f .agent/events.jsonl ] && [ ! -e "$_cairn_gd/MERGE_HEAD" ] && [ ! -d "$_cairn_gd/rebase-merge" ] && [ ! -d "$_cairn_gd/rebase-apply" ]; then
       if ! git diff --quiet -- .agent 2>/dev/null || git ls-files --others --exclude-standard -- .agent 2>/dev/null | grep -q .; then
-        CAIRN_SKIP_HOOK=1 git add -- .agent >/dev/null 2>&1 || true
+        # Stage only additions/modifications under .agent — never deletions, so a
+        # missing CONTEXT.md/snapshot can't be committed away either.
+        CAIRN_SKIP_HOOK=1 git add --ignore-removal -- .agent >/dev/null 2>&1 || true
         CAIRN_SKIP_HOOK=1 git commit -q --no-verify -m "chore(cairn): sync journal" -- .agent >/dev/null 2>&1 || true
       fi
     fi

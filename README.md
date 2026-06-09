@@ -87,17 +87,19 @@ It comes down to **orientation cost**: how many tokens an agent burns answering
 
 | Approach | What the agent reads | Tokens to orient |
 |---|---|---|
-| **Without Cairn** | git log + the 6 most-recently-changed files (what a cold agent actually does) | **78,912** |
-| **With Cairn** | one `CONTEXT.md` read | **508** |
-| **Difference** | | **~155× cheaper** |
+| **Without Cairn** | git log + the 6 most-recently-changed files (what a cold agent actually does) | **~16,600** |
+| **With Cairn** | one `CONTEXT.md` read (~1 KB) | **~235** |
+| **Difference** | | **~70× cheaper** |
 
-> Reproduce: `npm run wedge` (or `node scripts/wedge-eval.mjs`). Numbers scale with
-> repo size — the bigger the codebase, the wider the gap, because the "without"
-> column is a repo scan and the "with" column is a fixed ~1 KB file.
+> Reproduce: `npm run wedge` (or `node scripts/wedge-eval.mjs`) on this repo. The
+> "without" figure depends on the size of the recently-changed files, so the exact
+> ratio moves with repo state — we've measured **~70× to ~150×** here. The
+> direction is the constant: a fixed ~1 KB read versus a repo scan that only grows
+> with the codebase.
 
-That's per session, per agent. A team of 4 agents opening the repo 10×/day pays the
-"without" cost **40 times a day** — ~3.16M tokens/day on this repo — versus ~20k
-with Cairn.
+That's per session, per agent. Four agents opening the repo 10×/day pay the
+"without" cost **40 times a day** — roughly **660k tokens/day** on this repo —
+versus ~9k with Cairn.
 
 ### It's not just cheaper — it's correct
 
@@ -108,7 +110,7 @@ reconstruct from code at any token cost**, because git shows *what* changed, nev
 | Fact in `CONTEXT.md` | On this repo | Recoverable from a repo scan? |
 |---|---|---|
 | Current goal | "Ship Cairn v0.1" | Guessable, often wrong |
-| Active decisions **+ rationale** | 8 | ❌ No — reasons aren't in the code |
+| Active decisions **+ rationale** | 9 | ❌ No — reasons aren't in the code |
 | Recommended next action | 1 | ❌ No |
 | Recent activity | 2 lines | Partially (git log) |
 
@@ -281,10 +283,6 @@ rebuilds perfectly from `events.jsonl` alone.
 ```text
 agents ──append──► events.jsonl (source of truth) ──reducers──► state · context · timeline · memory
 ```
-
-See [ARCHITECTURE.md](docs/ARCHITECTURE.md) · [PROTOCOL.md](docs/PROTOCOL.md) ·
-[EVENT_MODEL.md](docs/EVENT_MODEL.md) · [CONCURRENCY.md](docs/CONCURRENCY.md) ·
-[MCP.md](docs/MCP.md) · [SDK.md](docs/SDK.md) · [ROADMAP.md](docs/ROADMAP.md).
 
 ## License
 
