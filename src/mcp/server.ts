@@ -96,11 +96,11 @@ export function createServer(): McpServer {
       "Use canonical types (task.created, task.completed, decision.made, " +
       "file.modified, knowledge.learned, agent.heartbeat, …) or any custom.* type.",
     {
-      type: z.string().describe("Event type, e.g. 'decision.made'"),
+      type: z.string().max(256).describe("Event type, e.g. 'decision.made'"),
       payload: z.record(z.any()).optional().describe("Structured event data"),
-      actor: z.string().optional().describe("Who is producing the event"),
-      sessionId: z.string().optional().describe("Session/run scope"),
-      id: z.string().optional().describe("Explicit id for idempotency"),
+      actor: z.string().max(256).optional().describe("Who is producing the event"),
+      sessionId: z.string().max(256).optional().describe("Session/run scope"),
+      id: z.string().max(256).optional().describe("Explicit id for idempotency"),
     },
     async ({ type, payload, actor, sessionId, id }) =>
       withStore((s) =>
@@ -239,9 +239,9 @@ export function createServer(): McpServer {
     "Send a realtime chat message to other agents working in this repo. Omit " +
       "`to` to broadcast to everyone. `to` may be an agent name or a team name.",
     {
-      body: z.string().describe("Message text"),
-      to: z.string().optional().describe("Recipient agent or team; omit to broadcast"),
-      team: z.string().optional().describe("Tag the message as belonging to this team channel"),
+      body: z.string().max(8192).describe("Message text"),
+      to: z.string().max(256).optional().describe("Recipient agent or team; omit to broadcast"),
+      team: z.string().max(256).optional().describe("Tag the message as belonging to this team channel"),
     },
     async ({ body, to, team }) =>
       withStore((s) =>
