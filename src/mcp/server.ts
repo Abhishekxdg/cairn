@@ -192,9 +192,9 @@ export function createServer(): McpServer {
     "register_agent",
     "Register the calling agent (records an agent.registered event).",
     {
-      name: z.string().describe("Agent display name"),
-      type: z.string().optional().describe("Agent kind"),
-      capabilities: z.array(z.string()).optional(),
+      name: z.string().max(256).describe("Agent display name"),
+      type: z.string().max(256).optional().describe("Agent kind"),
+      capabilities: z.array(z.string().max(256)).max(64).optional(),
     },
     async ({ name, type, capabilities }) =>
       withStore((s) =>

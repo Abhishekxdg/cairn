@@ -213,9 +213,10 @@ export class EventStore {
     input: NewEvent<P>,
   ): JournalEvent<P> {
     const payloadStr = JSON.stringify(input.payload ?? {});
-    if (payloadStr.length > EventStore.MAX_PAYLOAD_BYTES) {
+    const payloadBytes = Buffer.byteLength(payloadStr, "utf8");
+    if (payloadBytes > EventStore.MAX_PAYLOAD_BYTES) {
       throw new Error(
-        `event payload exceeds maximum size (${payloadStr.length} > ${EventStore.MAX_PAYLOAD_BYTES} bytes)`,
+        `event payload exceeds maximum size (${payloadBytes} > ${EventStore.MAX_PAYLOAD_BYTES} bytes)`,
       );
     }
     const row = {
@@ -485,8 +486,6 @@ function safeParse(s: string): Payload {
     // Prevent prototype pollution from stored payloads.
     if (parsed && typeof parsed === "object") {
       delete (parsed as Record<string, unknown>)["__proto__"];
-      delete (parsed as Record<string, unknown>)["constructor"];
-      delete (parsed as Record<string, unknown>)["prototype"];
     }
     return parsed;
   } catch {
