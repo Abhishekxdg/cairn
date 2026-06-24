@@ -3,6 +3,7 @@ import { readFileSync, existsSync, statSync } from "node:fs";
 import { join, dirname, extname, relative, resolve as resolvePath } from "node:path";
 import type { EventStore } from "../core/store.js";
 import type { CodeNode, CodeGraph, NewEvent } from "../core/types.js";
+import { str, arr } from "../core/payload.js";
 
 /**
  * Static code index — the cold-start half of "task → files".
@@ -244,16 +245,16 @@ export function deriveCodeGraph(store: EventStore): CodeGraph {
   for (const ev of store.streamEvents({ includeArchive: true })) {
     const p = ev.payload;
     if (ev.type === "code.indexed") {
-      const path = typeof p["path"] === "string" ? p["path"] : null;
+      const path = str(p["path"]);
       if (!path) continue;
       nodes.set(path, {
         path,
-        lang: typeof p["lang"] === "string" ? p["lang"] : "unknown",
-        imports: Array.isArray(p["imports"]) ? (p["imports"] as string[]).filter((x) => typeof x === "string") : [],
-        exports: Array.isArray(p["exports"]) ? (p["exports"] as string[]).filter((x) => typeof x === "string") : [],
+        lang: str(p["lang"], "unknown"),
+        imports: arr(p["imports"]),
+        exports: arr(p["exports"]),
       });
     } else if (ev.type === "file.deleted") {
-      const path = typeof p["path"] === "string" ? p["path"] : null;
+      const path = str(p["path"]);
       if (path) nodes.delete(path);
     }
   }

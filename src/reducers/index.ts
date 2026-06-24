@@ -10,6 +10,7 @@ import type {
   TaskPriority,
 } from "../core/types.js";
 import { nowIso } from "../core/ids.js";
+import { str, num, arr } from "../core/payload.js";
 
 /**
  * Reducers — pure folds from events to derived state.
@@ -46,15 +47,7 @@ class Builder {
   }
 }
 
-function str(v: unknown, fallback = ""): string {
-  return typeof v === "string" ? v : fallback;
-}
-function num(v: unknown, fallback = 0): number {
-  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
-}
-function arr(v: unknown): string[] {
-  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
-}
+
 /** Derived-entity id: explicit payload id, else the deterministic event id. */
 function entityId(ev: JournalEvent): string {
   return str(ev.payload["id"], ev.id);
