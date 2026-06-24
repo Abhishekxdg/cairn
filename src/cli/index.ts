@@ -75,6 +75,13 @@ function openStore(): EventStore {
   return new EventStore(agentPaths(requireRoot()).db);
 }
 
+/** Open the store, run `fn`, and always close — eliminates try/finally boilerplate. */
+function withStore<T>(fn: (s: EventStore) => T): T {
+  const s = openStore();
+  try { return fn(s); }
+  finally { s.close(); }
+}
+
 /** Shared body for `cairn upgrade` / `cairn update`. */
 function doUpgrade(_rest: string[], _flags: Parsed["flags"]): void {
   // Update the global package, then self-heal global rules to the new version.
@@ -209,8 +216,7 @@ const commands: Record<string, Handler> = {
   },
 
   status(_rest, flags) {
-    const store = openStore();
-    try {
+    withStore((store) => {
       const state = deriveState(store);
       if (flags["json"]) return out(JSON.stringify(state, null, 2));
       const m = readManifest(requireRoot());
@@ -236,9 +242,7 @@ const commands: Record<string, Handler> = {
       if (live.length) for (const a of live) out(`    ${c.green("●")} ${a.name} ${c.dim(`(${a.type})`)}`);
       else out(c.dim("    (none active)"));
       out("");
-    } finally {
-      store.close();
-    }
+    });
   },
 
   append(_rest, flags) {
@@ -279,62 +283,54 @@ const commands: Record<string, Handler> = {
   },
 
   anchors(_rest, flags) {
-    const store = openStore();
-    try {
-      const list = deriveAnchors(deriveState(store));
+    withStore((s) => {
+      const list = deriveAnchors(deriveState(s));
       if (flags["json"]) return out(JSON.stringify(list, null, 2));
       if (!list.length) return out(c.dim("No anchors. Pin one with: cairn anchor \"<durable fact>\""));
       out(c.bold(`⚓ ${list.length} anchor${list.length === 1 ? "" : "s"} (highest weight first)`));
       for (const a of list) {
         out(`  ${c.gray(`w${a.weight}`)} (${a.kind}) ${a.text} ${c.gray(`#${a.id}`)}`);
       }
-    } finally {
-      store.close();
-    }
+    });
   },
 
   state(_rest, _flags) {
-    const store = openStore();
-    try { out(JSON.stringify(deriveState(store), null, 2)); }
-    finally { store.close(); }
+    withStore((s) => out(JSON.stringify(deriveState(s), null, 2)));
   },
 
   timeline(_rest, flags) {
-    const store = openStore();
-    try {
-      const days = deriveTimeline(store, {
+    withStore((s) => {
+      const days = deriveTimeline(s, {
         ...(fstr(flags, "since") ? { sinceSeq: Number(fstr(flags, "since")) } : {}),
         ...(fstr(flags, "type") ? { types: [fstr(flags, "type")!] } : {}),
       });
       if (flags["json"]) return out(JSON.stringify(days, null, 2));
       out(renderTimeline(days));
-    } finally { store.close(); }
+    });
   },
 
   context(rest, flags) {
-    const store = openStore();
-    try {
+    withStore((s) => {
       const level = (fstr(flags, "level") as ContextLevel) ?? "medium";
       const task = (fstr(flags, "task") ?? rest.join(" ").trim()) || undefined;
       const ctx = task
-        ? compileTaskContext(store, task, { level, ...(fstr(flags, "k") ? { k: Number(fstr(flags, "k")) } : {}) })
-        : compileContext(store, { level });
+        ? compileTaskContext(s, task, { level, ...(fstr(flags, "k") ? { k: Number(fstr(flags, "k")) } : {}) })
+        : compileContext(s, { level });
       out(JSON.stringify(ctx, null, 2));
-    } finally { store.close(); }
+    });
   },
 
   index(_rest, flags) {
     const r = requireRoot();
-    const store = openStore();
-    try {
+    withStore((s) => {
       const res = indexRepo(r, { actor: actorOf(flags) });
-      const before = store.count();
-      if (res.events.length) store.batchAppend(res.events);
-      const added = store.count() - before;
+      const before = s.count();
+      if (res.events.length) s.batchAppend(res.events);
+      const added = s.count() - before;
       if (flags["json"]) return out(JSON.stringify({ ...res, events: res.events.length, added }, null, 2));
       out(c.green(`✔ Indexed ${res.files} files · ${res.edges} import edges · ${res.symbols} symbols`));
       out(c.dim(added ? `  ${added} new/changed file(s) recorded` : "  index already up to date"));
-    } finally { store.close(); }
+    });
   },
 
   async watch(_rest, flags) {
@@ -364,11 +360,10 @@ const commands: Record<string, Handler> = {
   relevant(rest, flags) {
     const query = (fstr(flags, "task") ?? rest.join(" ")).trim();
     if (!query) throw new Error('relevant requires a task description, e.g. cairn relevant "add payment retries"');
-    const store = openStore();
-    try {
+    withStore((s) => {
       const k = fstr(flags, "k") ? Number(fstr(flags, "k")) : 10;
       const diag = { corpusSize: 0, graphNodes: 0 };
-      const files = rankFiles(store, query, { k, diag });
+      const files = rankFiles(s, query, { k, diag });
       if (flags["json"]) return out(JSON.stringify(files, null, 2));
       if (!files.length) {
         if (diag.corpusSize === 0 && diag.graphNodes === 0) {
@@ -387,7 +382,7 @@ const commands: Record<string, Handler> = {
         out(`  ${c.green(f.score.toFixed(3))}  ${f.path.padEnd(maxLen)}  ${c.dim(f.why.slice(0, 48))}`);
       }
       out("");
-    } finally { store.close(); }
+    });
   },
 
   chat(rest, flags) {
@@ -487,24 +482,22 @@ const commands: Record<string, Handler> = {
 
   recall(_rest, flags) {
     const r = requireRoot();
-    const store = openStore();
-    try {
-      const driftCommits = gitDrift(store, r); // commits since the journal last synced
-      const ctx = writeContextFile(store, r, { driftCommits }); // refresh + return
+    withStore((s) => {
+      const driftCommits = gitDrift(s, r);
+      const ctx = writeContextFile(s, r, { driftCommits });
       out(flags["json"] ? JSON.stringify(ctx, null, 2) : renderRecall(ctx, { driftCommits }));
-    } finally { store.close(); }
+    });
   },
 
   sync(_rest, flags) {
     const r = requireRoot();
-    const store = openStore();
-    try {
+    withStore((s) => {
       // --working: capture UNCOMMITTED edits as provisional file events, so work
       // survives a session even when nothing is committed. Superseded by the real
       // commit later. Runs instead of the commit-history sync.
       if (flags["working"]) {
-        const w = syncWorking(store, r);
-        writeContextFile(store, r);
+        const w = syncWorking(s, r);
+        writeContextFile(s, r);
         if (flags["json"]) return out(JSON.stringify(w, null, 2));
         if (!w.synced) return out(c.yellow("⚠ Not a git repo — nothing to sync."));
         return out(w.events
@@ -513,7 +506,7 @@ const commands: Record<string, Handler> = {
             ? "Uncommitted changes already captured — nothing new."
             : "Working tree clean — nothing uncommitted to capture."));
       }
-      const res = syncGit(store, r, {
+      const res = syncGit(s, r, {
         full: Boolean(flags["full"]),
         extractIntent: !flags["no-extract"],
       });
@@ -521,9 +514,9 @@ const commands: Record<string, Handler> = {
       // Idempotent per content (hashed event id) → only changed files append.
       if (res.events && !flags["no-index"]) {
         const idx = indexRepo(r, { actor: actorOf(flags) });
-        if (idx.events.length) store.batchAppend(idx.events);
+        if (idx.events.length) s.batchAppend(idx.events);
       }
-      writeContextFile(store, r); // keep instant-recall file current
+      writeContextFile(s, r);
       // Self-healing rules: if the installed cairn carries newer rule text than
       // what's stamped in this repo's agent files, rewrite them now. Runs on
       // every commit (the post-commit hook calls sync), so a package update
@@ -540,7 +533,7 @@ const commands: Record<string, Handler> = {
           ? "Baseline set at HEAD — future commits will be captured automatically."
           : "Already up to date with git."));
       }
-    } finally { store.close(); }
+    });
   },
 
   snapshot(_rest, _flags) {
@@ -550,22 +543,20 @@ const commands: Record<string, Handler> = {
   },
 
   compact(_rest, flags) {
-    const store = openStore();
-    try {
+    withStore((s) => {
       const keep = fstr(flags, "keep-recent");
-      const jr = compactJournal(store, keep ? { keepRecent: Number(keep) } : {});
-      const pr = store.compact();
+      const jr = compactJournal(s, keep ? { keepRecent: Number(keep) } : {});
+      const pr = s.compact();
       if (flags["json"]) return out(JSON.stringify({ journal: jr, pages: pr }, null, 2));
       out(c.green(`✔ Archived ${jr.archived} events (cut seq ${jr.cutSeq}); hot table now ${jr.remaining}`));
       out(c.dim(`  reclaimed: ${pr.before} → ${pr.after} pages`));
-    } finally { store.close(); }
+    });
   },
 
   prune(_rest, flags) {
-    const store = openStore();
-    try {
+    withStore((s) => {
       const idle = fstr(flags, "idle-ms");
-      const r = pruneAgents(store, {
+      const r = pruneAgents(s, {
         actor: actorOf(flags),
         ...(idle ? { idleMs: Number(idle) } : {}),
       });
@@ -573,22 +564,20 @@ const commands: Record<string, Handler> = {
       out(r.pruned.length
         ? c.green(`✔ Pruned ${r.pruned.length} stale agent(s): ${r.pruned.join(", ")}`)
         : c.dim("No stale agents to prune."));
-    } finally { store.close(); }
+    });
   },
 
   export(_rest, flags) {
-    const store = openStore();
-    try {
-      const events = store.exportEvents();
+    withStore((s) => {
+      const events = s.exportEvents();
       out(flags["pretty"] ? JSON.stringify(events, null, 2) : JSON.stringify(events));
-    } finally { store.close(); }
+    });
   },
 
   doctor(_rest, flags) {
-    const store = openStore();
-    try {
-      const h = health(store);
-      const integ = validateIntegrity(store);
+    withStore((s) => {
+      const h = health(s);
+      const integ = validateIntegrity(s);
       if (flags["json"]) return out(JSON.stringify({ health: h, integrity: integ }, null, 2));
       out(`${h.ok ? c.green("✔") : c.yellow("⚠")} ${h.total} events (${h.events} hot, ${h.archived} archived) · seq ${h.lastSeq} · ${h.snapshots} snapshots (lag ${h.snapshotLag})`);
       out(`  schema v${h.schemaVersion} (expected v${h.expectedSchemaVersion})`);
@@ -598,25 +587,23 @@ const commands: Record<string, Handler> = {
       out("");
       out(h.ok && integ.healthy ? c.green("Healthy.") : c.red("Problems found."));
       if (!(h.ok && integ.healthy)) process.exitCode = 1;
-    } finally { store.close(); }
+    });
   },
 
   migrate(_rest, _flags) {
-    const store = openStore();
-    try {
-      const before = currentVersion(store.db);
-      const after = migrate(store.db);
+    withStore((s) => {
+      const before = currentVersion(s.db);
+      const after = migrate(s.db);
       out(after > before
         ? c.green(`✔ Migrated schema v${before} → v${after}`)
         : c.dim(`Already at schema v${after} (latest ${SCHEMA_VERSION})`));
-    } finally { store.close(); }
+    });
   },
 
   repair(_rest, _flags) {
-    const store = openStore();
-    try {
-      for (const a of repair(store).actions) out(c.green(`✔ ${a}`));
-    } finally { store.close(); }
+    withStore((s) => {
+      for (const a of repair(s).actions) out(c.green(`✔ ${a}`));
+    });
   },
 
   async mcp(_rest, _flags) {

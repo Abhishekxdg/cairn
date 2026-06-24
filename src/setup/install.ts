@@ -15,7 +15,7 @@ import {
   rulesBlock,
   upsertBetween,
   RULES_VERSION,
-  parseRulesVersion,
+  refreshRulesFiles,
 } from "./rules.js";
 
 /**
@@ -375,19 +375,12 @@ export function setupProject(
  * refreshed.
  */
 export function refreshProjectRules(root: string): string[] {
-  const cairnBin = cairnInvocation();
-  const refreshed: string[] = [];
-  for (const { path } of AGENT_FILES) {
-    const full = join(root, path);
-    if (!existsSync(full)) continue;
-    const existing = readFileSync(full, "utf8");
-    if (!existing.includes(BEGIN_MARKER)) continue; // not managed here
-    if (parseRulesVersion(existing) >= RULES_VERSION) continue; // already current
-    const { content } = upsertBetween(existing, BEGIN_MARKER, END_MARKER, rulesBlock(cairnBin));
-    if (content !== existing) {
-      writeFileSync(full, content);
-      refreshed.push(path);
-    }
-  }
-  return refreshed;
+  return refreshRulesFiles({
+    files: AGENT_FILES.map((f) => ({ rel: f.path })),
+    base: root,
+    beginMarker: BEGIN_MARKER,
+    endMarker: END_MARKER,
+    version: RULES_VERSION,
+    block: rulesBlock(cairnInvocation()),
+  });
 }

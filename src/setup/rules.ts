@@ -1,3 +1,6 @@
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
 /**
  * The canonical Cairn usage rules injected into every coding agent's instruction
  * file. This is what teaches Claude Code / Codex / Cursor / Copilot / Gemini how
@@ -179,4 +182,34 @@ export function upsertBetween(
   const base = existing.trimEnd();
   const content = base ? `${base}\n\n${trimmed}\n` : `${trimmed}\n`;
   return { content, updated: false };
+}
+
+/**
+ * Self-healing rules refresh: rewrite any file whose managed Cairn block is
+ * older than the target version. Only touches files that already contain the
+ * begin marker — never creates new files. Shared by project-level and
+ * global-level refresh.
+ */
+export function refreshRulesFiles(opts: {
+  files: Array<{ rel: string }>;
+  base: string;
+  beginMarker: string;
+  endMarker: string;
+  version: number;
+  block: string;
+}): string[] {
+  const refreshed: string[] = [];
+  for (const { rel } of opts.files) {
+    const full = join(opts.base, rel);
+    if (!existsSync(full)) continue;
+    const existing = readFileSync(full, "utf8");
+    if (!existing.includes(opts.beginMarker)) continue;
+    if (parseRulesVersion(existing) >= opts.version) continue;
+    const { content } = upsertBetween(existing, opts.beginMarker, opts.endMarker, opts.block);
+    if (content !== existing) {
+      writeFileSync(full, content);
+      refreshed.push(rel);
+    }
+  }
+  return refreshed;
 }

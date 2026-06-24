@@ -7,7 +7,7 @@ import {
   globalRulesBlock,
   upsertBetween,
   GLOBAL_RULES_VERSION,
-  parseRulesVersion,
+  refreshRulesFiles,
 } from "./rules.js";
 
 /**
@@ -111,23 +111,12 @@ export function uninstallGlobal(opts: { home?: string } = {}): GlobalSetupResult
  */
 export function refreshGlobalRules(opts: { home?: string } = {}): string[] {
   const home = opts.home ?? homedir();
-  const refreshed: string[] = [];
-  for (const { rel } of GLOBAL_AGENT_FILES) {
-    const full = join(home, rel);
-    if (!existsSync(full)) continue;
-    const existing = readFileSync(full, "utf8");
-    if (!existing.includes(GLOBAL_BEGIN_MARKER)) continue;
-    if (parseRulesVersion(existing) >= GLOBAL_RULES_VERSION) continue;
-    const { content } = upsertBetween(
-      existing,
-      GLOBAL_BEGIN_MARKER,
-      GLOBAL_END_MARKER,
-      globalRulesBlock(),
-    );
-    if (content !== existing) {
-      writeFileSync(full, content);
-      refreshed.push(rel);
-    }
-  }
-  return refreshed;
+  return refreshRulesFiles({
+    files: GLOBAL_AGENT_FILES.map((f) => ({ rel: f.rel })),
+    base: home,
+    beginMarker: GLOBAL_BEGIN_MARKER,
+    endMarker: GLOBAL_END_MARKER,
+    version: GLOBAL_RULES_VERSION,
+    block: globalRulesBlock(),
+  });
 }
