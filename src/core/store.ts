@@ -201,6 +201,9 @@ export class EventStore {
     return row?.value;
   }
 
+  /** Maximum serialized payload size in bytes (1 MB). Prevents DoS via oversized events. */
+  static readonly MAX_PAYLOAD_BYTES = 1_048_576;
+
   /**
    * Append a single event. Idempotent on `id`: appending an event whose id
    * already exists is a no-op and returns the existing row. Atomic and
@@ -209,6 +212,13 @@ export class EventStore {
   appendEvent<P extends Payload = Payload>(
     input: NewEvent<P>,
   ): JournalEvent<P> {
+    const payloadStr = JSON.stringify(input.payload ?? {});
+    const payloadBytes = Buffer.byteLength(payloadStr, "utf8");
+    if (payloadBytes > EventStore.MAX_PAYLOAD_BYTES) {
+      throw new Error(
+        `event payload exceeds maximum size (${payloadBytes} > ${EventStore.MAX_PAYLOAD_BYTES} bytes)`,
+      );
+    }
     const row = {
       id: input.id ?? ulid(),
       timestamp: input.timestamp ?? nowIso(),
@@ -217,7 +227,7 @@ export class EventStore {
       projectId: this.projectId,
       type: input.type,
       version: input.version ?? 1,
-      payload: JSON.stringify(input.payload ?? {}),
+      payload: payloadStr,
     };
     const info = this.insertStmt.run(row);
     if (info.changes === 0) {
@@ -350,7 +360,12 @@ export class EventStore {
       "SELECT * FROM events" +
       (where.length ? ` WHERE ${where.join(" AND ")}` : "") +
       ` ORDER BY seq ${q.order === "desc" ? "DESC" : "ASC"}` +
-      (q.limit ? ` LIMIT ${Math.max(0, Math.floor(q.limit))}` : "");
+      (q.limit ? " LIMIT ?" : "");
+    if (q.limit) {
+      const safeLimit = Math.max(0, Math.floor(Number(q.limit)));
+      if (!Number.isFinite(safeLimit)) throw new Error("invalid limit");
+      params.push(safeLimit);
+    }
     return (this.db.prepare(sql).all(...params) as RawRow[]).map((r) =>
       this.hydrate(r),
     );
@@ -467,7 +482,12 @@ interface RawRow {
 
 function safeParse(s: string): Payload {
   try {
-    return JSON.parse(s) as Payload;
+    const parsed = JSON.parse(s) as Payload;
+    // Prevent prototype pollution from stored payloads.
+    if (parsed && typeof parsed === "object") {
+      delete (parsed as Record<string, unknown>)["__proto__"];
+    }
+    return parsed;
   } catch {
     return { _corrupt: s };
   }

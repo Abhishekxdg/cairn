@@ -131,7 +131,11 @@ export function nodeFromContent(path: string, content: string, known: Set<string
 /** Build a {@link CodeNode} for one file (path is repo-relative). Reads disk. */
 export function indexFile(root: string, path: string, known: Set<string>): CodeNode {
   if (langOf(path) !== "js-ts") return { path, lang: langOf(path), imports: [], exports: [] };
-  const abs = join(root, path);
+  // Prevent path traversal: ensure the resolved path stays within root.
+  const abs = resolvePath(root, path);
+  if (!abs.startsWith(resolvePath(root) + "/") && abs !== resolvePath(root)) {
+    return { path, lang: langOf(path), imports: [], exports: [] };
+  }
   let content = "";
   try {
     if (existsSync(abs) && statSync(abs).isFile()) content = readFileSync(abs, "utf8");
