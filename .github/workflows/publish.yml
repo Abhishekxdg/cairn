@@ -9,6 +9,8 @@ on:
   push:
     tags:
       - "v*"
+  # a release whose tag is in place but whose publish failed, published again from the ref it is run on
+  workflow_dispatch:
 
 jobs:
   publish:
@@ -30,6 +32,7 @@ jobs:
       - run: npm ci
 
       - name: Verify tag matches package.json version
+        if: github.ref_type == 'tag'
         run: |
           TAG="${GITHUB_REF_NAME#v}"
           PKG="$(node -p "require('./package.json').version")"
@@ -45,4 +48,5 @@ jobs:
       - run: npm test
 
       - name: Publish
-        run: npm publish --provenance --access public
+        # (verbose: npm says why, when the registry doesn't take this workflow as the trusted publisher)
+        run: npm publish --provenance --access public --loglevel verbose

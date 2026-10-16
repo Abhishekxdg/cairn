@@ -116,11 +116,13 @@ describe("more lifecycle edges", () => {
 
   it("anchors: flag flows from payload; durable is an alias; default is false", () => {
     const s = memStore();
-    s.appendEvent({ type: "decision.made", payload: { id: "d1", title: "Anchored", anchor: true } });
-    s.appendEvent({ type: "knowledge.learned", payload: { id: "k1", statement: "durable flag", durable: true } });
-    s.appendEvent({ type: "knowledge.learned", payload: { id: "k2", statement: "anchor flag", anchor: true } });
-    s.appendEvent({ type: "decision.made", payload: { id: "d0", title: "ordinary" } });
-    s.appendEvent({ type: "knowledge.learned", payload: { id: "k0", statement: "ordinary" } });
+    // one timestamp for all: anchors rank by recency before kind, so events a millisecond apart reorder
+    const timestamp = "2026-01-01T00:00:00.000Z";
+    s.appendEvent({ type: "decision.made", payload: { id: "d1", title: "Anchored", anchor: true }, timestamp });
+    s.appendEvent({ type: "knowledge.learned", payload: { id: "k1", statement: "durable flag", durable: true }, timestamp });
+    s.appendEvent({ type: "knowledge.learned", payload: { id: "k2", statement: "anchor flag", anchor: true }, timestamp });
+    s.appendEvent({ type: "decision.made", payload: { id: "d0", title: "ordinary" }, timestamp });
+    s.appendEvent({ type: "knowledge.learned", payload: { id: "k0", statement: "ordinary" }, timestamp });
     const st = stateOf(s);
     expect(st.decisions.find((d) => d.id === "d1")?.anchor).toBe(true);
     expect(st.decisions.find((d) => d.id === "d0")?.anchor).toBe(false);
