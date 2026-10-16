@@ -2,6 +2,9 @@ name: Publish to npm
 
 # Publish on a version tag (e.g. `git tag v0.3.3 && git push --tags`).
 # No manual `npm publish`, no forgot-to-bump 403s — the tag IS the release.
+# No token either: npm trusts this workflow (trusted publishing, GitHub's OIDC identity), set on
+# npmjs.com under @memxai/cairn > Settings > Trusted Publisher: GitHub Actions, Abhishekxdg / cairn,
+# publish.yml. A token was refused for want of a one-time password; this never needs one.
 on:
   push:
     tags:
@@ -18,8 +21,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           registry-url: "https://registry.npmjs.org"
+
+      # trusted publishing needs npm 11.5.1 or later (Node 22 comes with 10)
+      - run: npm install -g npm@^11.5.1
 
       - run: npm ci
 
@@ -40,5 +46,3 @@ jobs:
 
       - name: Publish
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
