@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import type { Database as DB, Statement } from "better-sqlite3";
-import { mkdirSync, existsSync, appendFileSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, existsSync, appendFileSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type {
   JournalEvent,
@@ -63,25 +63,39 @@ export class EventStore {
     if (!opts.readonly) this.reconcileJsonl();
   }
 
-  /** Insert a fully-formed event row with an explicit seq (used by rehydrate). */
+  /**
+   * Insert a fully-formed event row, keeping its seq when that seq is free (used
+   * by rehydrate). An event merged in from another branch or clone can carry a
+   * seq this cache already gave a different event: it then gets the next seq
+   * instead of being dropped, so no event of the log is lost to a seq clash.
+   */
   private insertWithSeq(e: JournalEvent): void {
-    this.db
+    const values = [
+      e.id,
+      e.timestamp,
+      e.actor,
+      e.sessionId,
+      e.projectId,
+      e.type,
+      e.version,
+      JSON.stringify(e.payload ?? {}),
+    ];
+    const kept = this.db
       .prepare(
         `INSERT OR IGNORE INTO events
            (seq, id, timestamp, actor, session_id, project_id, type, version, payload)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(
-        e.seq,
-        e.id,
-        e.timestamp,
-        e.actor,
-        e.sessionId,
-        e.projectId,
-        e.type,
-        e.version,
-        JSON.stringify(e.payload ?? {}),
-      );
+      .run(e.seq, ...values).changes;
+    if (kept === 0 && !this.byIdStmt.get(e.id)) {
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO events
+             (id, timestamp, actor, session_id, project_id, type, version, payload)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(...values);
+    }
   }
 
   /** Append one event line to the committed `events.jsonl` mirror. */
@@ -105,71 +119,78 @@ export class EventStore {
   }
 
   /**
-   * Reconcile the SQLite cache with the committed `events.jsonl` source of truth.
-   * The jsonl is authoritative; the db is a rebuildable cache. Cases:
+   * Reconcile the SQLite cache with the committed `events.jsonl` source of truth,
+   * by event id, so neither side ever loses an event:
    * - db empty            → rebuild the cache from jsonl (fresh clone).
-   * - jsonl ahead of db   → load the missing events into the cache (merged-in
-   *                         history, or a crash that dropped a db write).
-   * - db ahead of jsonl   → restore jsonl from the durable db (legacy/pre-jsonl
-   *                         db, or a crash that dropped the last jsonl append).
-   * - equal but divergent → trust the committed log; rebuild the cache.
+   * - the log's events the cache lacks (history merged in by git, a pull, a
+   *   branch switch, or a crash that dropped a db write) → loaded into the cache.
+   *   One already cold-archived is known, so it never comes back hot.
+   * - the cache's events the log lacks (a crash that dropped a jsonl append, a
+   *   pre-jsonl db, or events recorded here on another branch whose log this
+   *   checkout no longer has) → APPENDED to the log. The log is never rewritten,
+   *   so no line git brought in can be dropped.
    *
-   * When events have been cold-archived, archived rows live only in SQLite, so a
-   * line-vs-row catch-up would resurrect them — fall back to the conservative
-   * "only materialize jsonl when the db is strictly ahead" rule.
+   * Counting can't tell these apart: a cache that holds more events than the log
+   * (other branches' events) while the log holds events the cache lacks (a merge)
+   * is both at once. Comparing counts and rewriting the log from the cache when
+   * the cache was "ahead" dropped every merged-in event.
    */
   private reconcileJsonl(): void {
     if (!this.jsonlPath) return;
+    const text = existsSync(this.jsonlPath) ? readFileSync(this.jsonlPath, "utf8") : "";
+    const lines = text.split("\n").filter((l) => l.trim());
     const dbCount = this.totalCount(); // hot + cold-archived
-    const lines = existsSync(this.jsonlPath)
-      ? readFileSync(this.jsonlPath, "utf8").split("\n").filter((l) => l.trim())
-      : [];
 
     if (dbCount === 0) {
       if (lines.length > 0) this.rebuildHotFromLines(lines);
       return;
     }
 
-    const materializeJsonl = () => {
-      const all = this.queryEvents({});
-      writeFileSync(this.jsonlPath!, all.map((e) => JSON.stringify(e)).join("\n") + "\n");
-    };
-
-    // Compaction in play: line-based catch-up is unsafe (would un-archive rows).
-    if (this.archivedCount() > 0) {
-      if (dbCount > lines.length) materializeJsonl();
-      return;
+    // The common case, at no more than a parse of the tail: same size, same last event.
+    if (lines.length === dbCount) {
+      let lastLineId: string | undefined;
+      try {
+        lastLineId = (JSON.parse(lines[lines.length - 1]!) as JournalEvent).id;
+      } catch {
+        lastLineId = undefined; // a corrupt tail line: compare every id below
+      }
+      const dbLastId = (
+        this.db.prepare("SELECT id FROM events ORDER BY seq DESC LIMIT 1").get() as
+          | { id: string }
+          | undefined
+      )?.id;
+      if (lastLineId !== undefined && lastLineId === dbLastId) return;
     }
 
-    // No archive: dbCount == hot table size.
-    if (lines.length > dbCount) {
-      // jsonl ahead → catch the cache up (only missing events are inserted).
-      this.rebuildHotFromLines(lines);
-      return;
+    const inLog = new Set<string>();
+    const logOnly: string[] = [];
+    const known = new Set<string>(
+      (
+        this.db
+          .prepare("SELECT id FROM events UNION SELECT id FROM events_archive")
+          .all() as { id: string }[]
+      ).map((r) => r.id),
+    );
+    for (const line of lines) {
+      let id: string | undefined;
+      try {
+        id = (JSON.parse(line) as JournalEvent).id;
+      } catch {
+        continue; // a corrupt line: left for `cairn repair`
+      }
+      if (typeof id !== "string") continue;
+      inLog.add(id);
+      if (!known.has(id)) logOnly.push(line);
     }
-    if (dbCount > lines.length) {
-      materializeJsonl(); // db ahead → restore the committed log from it.
-      return;
-    }
+    if (logOnly.length > 0) this.rebuildHotFromLines(logOnly);
 
-    // Equal length: detect equal-but-divergent (e.g. a bad merge kept the count)
-    // by comparing the tail event's identity. If they disagree, the committed
-    // log wins and the cache is rebuilt from it.
-    if (lines.length === 0) return;
-    let lastLineId: string | undefined;
-    try {
-      lastLineId = (JSON.parse(lines[lines.length - 1]!) as JournalEvent).id;
-    } catch {
-      return; // corrupt tail line — leave both for `cairn repair`.
+    const cacheOnly: string[] = [];
+    for (const e of this.streamEvents({ includeArchive: true })) {
+      if (!inLog.has(e.id)) cacheOnly.push(JSON.stringify(e));
     }
-    const dbLastId = (
-      this.db.prepare("SELECT id FROM events ORDER BY seq DESC LIMIT 1").get() as
-        | { id: string }
-        | undefined
-    )?.id;
-    if (lastLineId && dbLastId && lastLineId !== dbLastId) {
-      this.db.exec("DELETE FROM events");
-      this.rebuildHotFromLines(lines);
+    if (cacheOnly.length > 0) {
+      const sep = text.length > 0 && !text.endsWith("\n") ? "\n" : "";
+      appendFileSync(this.jsonlPath, sep + cacheOnly.join("\n") + "\n");
     }
   }
 
