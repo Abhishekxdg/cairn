@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **The journal no longer drops events git merged in.** The cache (`journal.db`)
+  and the committed log (`events.jsonl`) were reconciled by counting events: when
+  the cache held more (events recorded here on other branches) it rewrote the log
+  from itself, dropping every event a pull, merge or branch switch had just brought
+  in — while the log also held events the cache lacked. Reconciling is now by event
+  id: the log's events the cache lacks are loaded into it, the cache's events the
+  log lacks are appended to the log, and the log is never rewritten.
+- **A merged-in event whose `seq` this cache already used is loaded** with the next
+  free `seq`, instead of being skipped.
+- **Events merged in after `cairn compact` are loaded** into the cache; before, a
+  compacted journal never caught up with the log, and no archived event comes back.
+
 ## [0.3.2]
 
 ### Added

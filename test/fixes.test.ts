@@ -107,33 +107,112 @@ describe("store reconciles the committed log as the source of truth", () => {
     s2.close();
   });
 
-  it("rebuilds the cache from the log when they diverge at equal length", () => {
+  it("keeps both sides' events when they diverge at equal length", () => {
     const dir = tempDir();
     const dbPath = join(dir, "journal.db");
     const s1 = new EventStore(dbPath, { projectId: "t" });
     s1.appendEvent({ type: "custom.a", id: "a1" });
     s1.close();
 
-    // Same count, different content (e.g. a bad merge rewrote the line).
-    const replaced = {
-      seq: 1,
-      id: "z9",
-      timestamp: new Date().toISOString(),
-      actor: "",
-      sessionId: "",
-      projectId: "t",
-      type: "custom.z",
-      version: 1,
-      payload: {},
-    };
-    writeFileSync(join(dir, "events.jsonl"), JSON.stringify(replaced) + "\n");
+    // Same count, different content (a merge or checkout replaced the line).
+    writeFileSync(join(dir, "events.jsonl"), JSON.stringify(ev("z9", 1)) + "\n");
 
     const s2 = new EventStore(dbPath, { projectId: "t" });
-    expect(s2.getById("z9")).toBeTruthy(); // log wins
-    expect(s2.getById("a1")).toBeFalsy();
+    expect(s2.getById("z9")).toBeTruthy(); // the log's event reaches the cache
+    expect(s2.getById("a1")).toBeTruthy(); // and the cache's is not thrown away
+    s2.close();
+    expect(logIds(dir)).toEqual(["z9", "a1"]);
+  });
+
+  it("never drops merged-in events when the cache holds more than the log (pull, branch switch)", () => {
+    const dir = tempDir();
+    const dbPath = join(dir, "journal.db");
+    const s1 = new EventStore(dbPath, { projectId: "t" });
+    for (const id of ["a1", "a2", "a3", "a4"]) s1.appendEvent({ type: "custom.a", id });
+    s1.close();
+
+    // git replaces the log with another branch's: it lacks a3 and a4 (recorded here
+    // on the old branch) and brings m1 and m2, which this cache never saw. The
+    // cache now holds more events than the log, and the log holds events the cache lacks.
+    writeFileSync(
+      join(dir, "events.jsonl"),
+      [ev("a1", 1), ev("a2", 2), ev("m1", 3)].map((e) => JSON.stringify(e)).join("\n") + "\n",
+    );
+
+    const s2 = new EventStore(dbPath, { projectId: "t" });
+    for (const id of ["a1", "a2", "a3", "a4", "m1"]) expect(s2.getById(id)).toBeTruthy();
+    s2.close();
+    // the log kept every line git gave it, in place, and gained the cache's others at its end
+    expect(logIds(dir)).toEqual(["a1", "a2", "m1", "a3", "a4"]);
+
+    // reopening changes nothing more
+    new EventStore(dbPath, { projectId: "t" }).close();
+    expect(logIds(dir)).toEqual(["a1", "a2", "m1", "a3", "a4"]);
+  });
+
+  it("loads a merged-in event whose seq the cache already gave another event", () => {
+    const dir = tempDir();
+    const dbPath = join(dir, "journal.db");
+    const s1 = new EventStore(dbPath, { projectId: "t" });
+    s1.appendEvent({ type: "custom.a", id: "a1" });
+    s1.appendEvent({ type: "custom.a", id: "a2" });
+    s1.close();
+    // another clone numbered its own event 2 as well
+    appendFileSync(join(dir, "events.jsonl"), JSON.stringify(ev("x2", 2)) + "\n");
+
+    const s2 = new EventStore(dbPath, { projectId: "t" });
+    expect(s2.getById("a2")?.seq).toBe(2);
+    expect(s2.getById("x2")?.seq).toBeGreaterThan(2);
     s2.close();
   });
+
+  it("brings no cold-archived event back and repeats no line after compaction", () => {
+    const dir = tempDir();
+    const dbPath = join(dir, "journal.db");
+    const s1 = new EventStore(dbPath, { projectId: "t" });
+    for (const id of ["a1", "a2", "a3"]) s1.appendEvent({ type: "custom.a", id });
+    s1.compactEvents(2);
+    s1.close();
+    const before = logIds(dir);
+
+    const s2 = new EventStore(dbPath, { projectId: "t" });
+    expect(s2.count()).toBe(1); // a3 hot; a1 and a2 stay archived
+    expect(s2.totalCount()).toBe(3);
+    s2.close();
+    expect(logIds(dir)).toEqual(before);
+
+    // a merge brings m1: it joins the cache, and the archive stays as it was
+    appendFileSync(join(dir, "events.jsonl"), JSON.stringify(ev("m1", 9)) + "\n");
+    const s3 = new EventStore(dbPath, { projectId: "t" });
+    expect(s3.count()).toBe(2);
+    expect(s3.archivedCount()).toBe(2);
+    s3.close();
+    expect(logIds(dir)).toEqual([...before, "m1"]);
+  });
 });
+
+/** An event as the committed log holds it. */
+function ev(id: string, seq: number) {
+  return {
+    seq,
+    id,
+    timestamp: new Date().toISOString(),
+    actor: "",
+    sessionId: "",
+    projectId: "t",
+    type: "custom.x",
+    version: 1,
+    payload: {},
+  };
+}
+
+/** The ids in a journal folder's committed log, in file order. */
+function logIds(dir: string): string[] {
+  return readFileSync(join(dir, "events.jsonl"), "utf8")
+    .split("\n")
+    .filter((l) => l.trim())
+    .map((l) => (JSON.parse(l) as { id: string }).id);
+}
 
 describe("schema refuses a journal newer than the binary", () => {
   it("throws instead of silently mis-reading a future schema", () => {
