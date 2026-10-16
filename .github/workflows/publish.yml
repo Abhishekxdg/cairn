@@ -33,6 +33,9 @@ jobs:
           fi
           echo "Releasing $PKG"
 
+      # the CLI's tests run bin/cairn.js, which loads the build
+      - run: npm run build
+
       - run: npm test
 
       - name: Publish
